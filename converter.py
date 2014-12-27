@@ -1,64 +1,79 @@
 #!/usr/bin/env python
+import os
 import sys
 import ldap
-import psycopg2
-import psycopg2.extras
-import argparse
 import uuid
 import base64
+import argparse
+import psycopg2
+import psycopg2.extras
+import subprocess
+
+from M2Crypto import RSA
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Transfer legacy users/groups with permissions into new extension api.'
+        description='Convert legacy users/groups with permissions into new extension api.'
     )
     parser.add_argument(
-        '--host',
-        default='localhost',
-        help='host where database is running (default: localhost)'
+        '--prefix',
+        default='/',
+        help='for testing withing dev env'
     )
     parser.add_argument(
-        '--dbname',
-        default='engine',
-        help='database name (default: engine)'
-    )
-    parser.add_argument(
-        '--port',
-        default='5432',
-        help='port of database (default: 5432)'
-    )
-    parser.add_argument(
-        '--dbuser',
-        default='postgres',
-        help='database user (default: postgres)'
-    )
-    parser.add_argument(
-        '--dbpassword',
-        help='database password (default: empty)'
-    )
-    parser.add_argument(
-        '--legacydomain',
+        '--domain',
+        required=True,
         help='legacy domain name'
     )
     parser.add_argument(
-        '--newdomain',
-        help='new domain name'
+        '--authn-name',
+        help='authn extension name'
     )
     parser.add_argument(
-        '--ldapuser',
-        help='ldap user to bind with'
+        '--authz-extension',
+        help='authz extension name'
     )
     parser.add_argument(
-        '--ldappassword',
-        help='ldap user password'
+        '--profile',
+        help='specify new profile name'
     )
     args = parser.parse_args(sys.argv[1:])
-    if not (args.legacydomain and args.newdomain and args.ldappassword and args.ldapuser):
-        parser.error(
-            'Domains need to be specified, add --legacydomain, --newdomain, --ldapuser and --ldappassword'
-        )
+    if not args.authn_name:
+        args.authn_name = '%s-authn' % args.domain
+
+    if not args.authz_extension:
+        args.authz_extension = '%s-authz' % args.domain
+
+    if not args.profile:
+        args.profile = '%s-new' % args.domain
 
     return args
+
+
+class OptionDecrypt():
+
+    def __init__(self, prefix):
+        pkcs12 = os.path.join(prefix, 'etc/pki/ovirt-engine/keys/engine.p12')
+        password = 'mypass'
+        self._rsa = RSA.load_key_string(
+            subprocess.check_output(
+                args=(
+                    "openssl",
+                    "pkcs12",
+                    "-nocerts", "-nodes",
+                    "-in", pkcs12,
+                    "-passin", "pass:%s" % password,
+                ),
+                stderr=subprocess.STDOUT,
+            )
+        )
+
+    def decrypt(self, s):
+        return self._rsa.private_decrypt(
+            base64.b64decode(s),
+            padding=RSA.pkcs1_padding,
+        )
 
 
 class User(object):
@@ -77,85 +92,355 @@ class Group(object):
         self.__dict__.update(row)
 
 
+class Statement(object):
+
+    @property
+    def environment(self):
+        return self._environment
+
+    def __init__(
+        self,
+        dbenvkeys,
+        environment,
+    ):
+        super(Statement, self).__init__()
+        self._environment = environment
+        self._dbenvkeys = dbenvkeys
+
+    def connect(
+        self,
+        host=None,
+        port=None,
+        secured=None,
+        securedHostValidation=None,
+        user=None,
+        password=None,
+        database=None,
+    ):
+        if host is None:
+            host = self.environment[self._dbenvkeys['host']]
+        if port is None:
+            port = self.environment[self._dbenvkeys['port']]
+        if secured is None:
+            secured = self.environment[self._dbenvkeys['secured']]
+        if securedHostValidation is None:
+            securedHostValidation = self.environment[
+                self._dbenvkeys['hostValidation']
+            ]
+        if user is None:
+            user = self.environment[self._dbenvkeys['user']]
+        if password is None:
+            password = self.environment[self._dbenvkeys['password']]
+        if database is None:
+            database = self.environment[self._dbenvkeys['database']]
+
+        sslmode = 'allow'
+        if secured:
+            if securedHostValidation:
+                sslmode = 'verify-full'
+            else:
+                sslmode = 'require'
+
+        #
+        # old psycopg2 does not know how to ignore
+        # uselss parameters
+        #
+        if not host:
+            connection = psycopg2.connect(
+                database=database,
+            )
+        else:
+            #
+            # port cast is required as old psycopg2
+            # does not support unicode strings for port.
+            # do not cast to int to avoid breaking usock.
+            #
+            connection = psycopg2.connect(
+                host=host,
+                port=str(port),
+                user=user,
+                password=password,
+                database=database,
+                sslmode=sslmode,
+            )
+
+        return connection
+
+    def execute(
+        self,
+        statement,
+        args=dict(),
+        host=None,
+        port=None,
+        secured=None,
+        securedHostValidation=None,
+        user=None,
+        password=None,
+        database=None,
+        ownConnection=False,
+        transaction=True,
+    ):
+        # autocommit member is available at >= 2.4.2
+        def __backup_autocommit(connection):
+            if hasattr(connection, 'autocommit'):
+                return connection.autocommit
+            else:
+                return connection.isolation_level
+
+        def __restore_autocommit(connection, v):
+            if hasattr(connection, 'autocommit'):
+                connection.autocommit = v
+            else:
+                connection.set_isolation_level(v)
+
+        def __set_autocommit(connection, autocommit):
+            if hasattr(connection, 'autocommit'):
+                connection.autocommit = autocommit
+            else:
+                connection.set_isolation_level(
+                    psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
+                    if autocommit
+                    else
+                    psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED
+                )
+
+        ret = []
+        old_autocommit = None
+        _connection = None
+        cursor = None
+        try:
+            if not ownConnection:
+                connection = self.environment[self._dbenvkeys['connection']]
+            else:
+
+                _connection = connection = self.connect(
+                    host=host,
+                    port=port,
+                    secured=secured,
+                    securedHostValidation=securedHostValidation,
+                    user=user,
+                    password=password,
+                    database=database,
+                )
+
+            if not transaction:
+                old_autocommit = __backup_autocommit(connection)
+                __set_autocommit(connection, True)
+
+            cursor = connection.cursor()
+            cursor.execute(
+                statement,
+                args,
+            )
+
+            if cursor.description is not None:
+                cols = [d[0] for d in cursor.description]
+                while True:
+                    entry = cursor.fetchone()
+                    if entry is None:
+                        break
+                    ret.append(dict(zip(cols, entry)))
+
+        except:
+            if _connection is not None:
+                _connection.rollback()
+            raise
+        else:
+            if _connection is not None:
+                _connection.commit()
+        finally:
+            if old_autocommit is not None and connection is not None:
+                __restore_autocommit(connection, old_autocommit)
+            if cursor is not None:
+                cursor.close()
+            if _connection is not None:
+                _connection.close()
+
+        return ret
+
+
 class DBUtils(object):
 
-    @staticmethod
-    def get_legacy_users(db_connection, legacydomain):
-        """
-        :param db_connection:
-        :param legacydomain:
-        :return:
-        """
-        db_connection._cursor.execute("SELECT * FROM users WHERE domain = '%s'" % legacydomain)
-        users = db_connection._cursor.fetchall()
+    def __init__(self, statement):
+        self.statement = statement
+
+    def __get_x_for_domain(self, domain, val):
+        x = None
+        result = self.statement.execute(
+            statement="""
+                SELECT option_value from vdc_options where option_name = %(val)s
+            """,
+            args=dict(
+                val=val
+            ),
+            ownConnection=True,
+            transaction=False,
+        )
+        if len(result) <= 0:
+            return None
+
+        result = result[0]['option_value']
+        for val in result.split(','):
+            if val.startswith(domain):
+                x = val[val.find(':') + 1:]
+                break
+
+        return x
+
+    def __get_password_for_domain(self, domain, prefix):
+        return OptionDecrypt(prefix).decrypt(
+            self.__get_x_for_domain(domain, 'AdUserPassword')
+        )
+
+    def __get_user_for_domain(self, domain):
+        username = self.__get_x_for_domain(domain, 'AdUserName')
+        return username[:username.find('@')]
+
+    def get_user_and_password_for_domain(self, domain, prefix):
+        user = self.__get_user_for_domain(domain)
+        password = self.__get_password_for_domain(domain, prefix)
+
+        return user, password
+
+    def get_legacy_users(self, legacy_domain):
+        users = self.statement.execute(
+            statement="""
+                SELECT * FROM users WHERE domain = %(legacy_domain)s
+            """,
+            args=dict(
+                legacy_domain=legacy_domain,
+            ),
+            ownConnection=True,
+            transaction=False,
+        )
 
         return [User(user) for user in users]
 
-    @staticmethod
-    def get_legacy_groups(db_connection, legacydomain):
-        db_connection._cursor.execute("SELECT * FROM ad_groups WHERE domain = '%s'" % legacydomain)
-        groups = db_connection._cursor.fetchall()
+    def get_legacy_groups(self, legacy_domain):
+        groups = self.statement.execute(
+            statement="""
+                SELECT * FROM ad_groups WHERE domain = %(legacy_domain)s
+            """,
+            args=dict(
+                legacy_domain=legacy_domain,
+            ),
+            ownConnection=True,
+            transaction=False,
+        )
 
         return [Group(group) for group in groups]
 
-    @staticmethod
-    def insert_new_perm(db_connection, legacy_id, new_id):
-        db_connection._cursor.execute("SELECT * FROM permissions WHERE ad_element_id = '%s'" % legacy_id)
-        permission = db_connection._cursor.fetchall()[0]
+    def insert_new_perm(self, legacy_id, new_id):
+        permission = self.statement.execute(
+            statement="""
+                SELECT * FROM permissions WHERE ad_element_id =%(legacy_id)s
+            """,
+            args=dict(
+                legacy_id=legacy_id,
+            ),
+            ownConnection=True,
+            transaction=False,
+        )[0]
 
-        insert_query = "INSERT INTO permissions VALUES ('%s', '%s', '%s', '%s', '%s')"
-        db_connection._cursor.execute(
-            insert_query % (
-                uuid.uuid4(),
-                permission['role_id'],
-                new_id,
-                permission['object_id'],
-                permission['object_type_id']
-            )
+        self.statement.execute(
+            statement="""
+                INSERT INTO permissions (
+                    id, role_id, ad_element_id, object_id, object_type_id
+                ) VALUES (
+                    %(id)s,
+                    %(role_id)s,
+                    %(ad_element_id)s,
+                    %(object_id)s,
+                    %(object_type_id)s
+                )
+            """,
+            args=dict(
+                id=str(uuid.uuid4()),
+                role_id=permission['role_id'],
+                ad_element_id=new_id,
+                object_id=permission['object_id'],
+                object_type_id=permission['object_type_id']
+            ),
+            ownConnection=True,
+            transaction=False,
         )
 
-    @staticmethod
-    def insert_new_perms(db_connection, useridsmap):
+    def insert_new_perms(self, useridsmap):
         for userid_map in useridsmap:
-            DBUtils.insert_new_perm(
-                db_connection,
+            self.insert_new_perm(
                 userid_map[0],
                 userid_map[1]
             )
-        db_connection._conn.commit()
 
-    @staticmethod
-    def insert_new_user(db_connection, user):
-        """
-        :param db_connection:
-        :param user:
-        :return:
-        """
-        insert_query = """
-        INSERT INTO users VALUES (
-        '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s',
-        '%s', %s, '%s', '%s', '%s', '%s', '%s', '%s'
-        )"""
-        db_connection._cursor.execute(
-            insert_query % (user.user_id, user.name, user.surname, user.domain,
-                            user.username, user.groups, user.department,
-                            user.role, user.email, user.note,
-                            user.last_admin_check_status, user.group_ids,
-                            user.external_id, user.active, user._create_date,
-                            user._update_date, user.namespace)
+    def insert_new_user(self, user):
+        self.statement.execute(
+            statement="""
+                INSERT INTO users (
+                    user_id, name, surname,
+                    domain, username, groups,
+                    department, role, email,
+                    note, last_admin_check_status,
+                    group_ids, external_id, active,
+                    _create_date, _update_date,
+                    namespace
+                ) VALUES (
+                    %(user_id)s, %(name)s, %(surname)s,
+                    %(domain)s, %(username)s, %(groups)s,
+                    %(department)s, %(role)s, %(email)s,
+                    %(note)s, %(last_admin_check_status)s,
+                    %(group_ids)s, %(external_id)s, %(active)s,
+                    %(_create_date)s, %(_update_date)s,
+                    %(namespace)s
+                )
+         """,
+            args=dict(
+                user_id=user.user_id,
+                name=user.name,
+                surname=user.surname,
+                domain=user.domain,
+                username=user.username,
+                groups=user.groups,
+                department=user.department,
+                role=user.role,
+                email=user.email,
+                note=user.note,
+                last_admin_check_status=user.last_admin_check_status,
+                group_ids=user.group_ids,
+                external_id=user.external_id,
+                active=user.active,
+                _create_date=user._create_date,
+                _update_date=user._update_date,
+                namespace=user.namespace
+            ),
+            ownConnection=True,
+            transaction=False,
         )
-        db_connection._conn.commit()
 
-    @staticmethod
-    def insert_new_group(db_connection, group):
-        insert_query = "INSERT INTO ad_groups VALUES ('%s', '%s', '%s', '%s', '%s', '%s')"
-        db_connection._cursor.execute(
-            insert_query % (
-                group.id, group.name, group.domain, group.distinguishedname,
-                group.external_id, group.namespace
-            )
+    def insert_new_group(self, group):
+        self.statement.execute(
+            statement="""
+                INSERT INTO ad_groups (
+                    id, name, domain, distinguishedname, external_id, namespace
+                ) VALUES (
+                    %(id)s,
+                    %(name)s,
+                    %(domain)s,
+                    %(distinguishedname)s,
+                    %(external_id)s,
+                    %(namespace)s
+                )
+            """,
+            args=dict(
+                id=group.id,
+                name=group.name,
+                domain=group.domain,
+                distinguishedname=group.distinguishedname,
+                external_id=group.external_id,
+                namespace=group.namespace
+            ),
+            ownConnection=True,
+            transaction=False,
         )
-        db_connection._conn.commit()
 
 
 class LDAP(object):
@@ -206,6 +491,15 @@ class ADLDAP(LDAP):
         )
         return result[0][1]
 
+    def get_ldap_user_dn(self, search_base, user):
+        result = self.conn.search_s(
+            'CN=Users,%s' % search_base,
+            ldap.SCOPE_SUBTREE,
+            '(cn=%s)' % user,
+            ['distinguishedName']
+        )
+        return result[0][1]
+
     def get_ldap_group(self, search_base, legacygroup):
         group_name = legacygroup.name[legacygroup.name.rfind('/') + 1 : legacygroup.name.find('@')]
         result = self.conn.search_s(
@@ -223,15 +517,22 @@ class Transform(object):
         self.ad = None
 
     def connect(self, user, password, domain):
+        username = '%s@%s' % (user, domain)
         self.ad = ADLDAP()
-        self.ad.connect(user, password, domain)
+        self.ad.connect(username, password, domain)
 
     def obtain_namespaces(self):
         self.namespaces = self.ad.get_namespaces()
 
+    def get_user_dn(self, user):
+        return self.ad.get_ldap_user_dn(
+            self.ad._get_default_naming_context(),
+            user
+        )['distinguishedName'][0]
+
     def transform_group(self, legacygroup, newdomain):
         legacygroup.legacy_id = legacygroup.id
-        legacygroup.id = uuid.uuid4()
+        legacygroup.id = str(uuid.uuid4())
         legacygroup.domain = newdomain
 
         if legacygroup.distinguishedname is None:
@@ -252,7 +553,7 @@ class Transform(object):
 
     def transform_user(self, legacyuser, newdomain):
         legacyuser.legacy_id = legacyuser.user_id
-        legacyuser.user_id = uuid.uuid4()
+        legacyuser.user_id = str(uuid.uuid4())
         legacyuser.domain = newdomain
         legacyuser.group_ids = ''
         legacyuser.groups = ''
@@ -283,69 +584,121 @@ class Transform(object):
         return candidate if candidate else None
 
 
-class DBConnection(object):
-    _cursor = None
-    _conn = None
-    instance = None
-
-    def __new__(cls, args):
-        if DBConnection.instance is None:
-            DBConnection.instance = object.__new__(cls)
-
-            if not DBConnection.instance._cursor:
-                DBConnection.instance._conn = psycopg2.connect(
-                    database=args.dbname,
-                    user=args.dbuser,
-                    password=args.dbpassword,
-                    host=args.host,
-                    port=args.port
-                )
-                DBConnection.instance._cursor = DBConnection.instance._conn.cursor(
-                    cursor_factory=psycopg2.extras.DictCursor
-                )
-        return DBConnection.instance
-
-    def close(cls):
-        if cls._cursor:
-            cls._cursor.close()
-        if cls._conn:
-            cls._conn.close()
-
-
-def transform_users(dbconn, transform, args, legacy_ids_map):
-    legacyusers = DBUtils.get_legacy_users(dbconn, args.legacydomain)
+def transform_users(dbutil, transform, args, legacy_ids_map):
+    legacyusers = dbutil.get_legacy_users(args.domain)
 
     for legacyuser in legacyusers:
-        new_user = transform.transform_user(legacyuser, args.newdomain)
-        DBUtils.insert_new_user(dbconn, new_user)
+        new_user = transform.transform_user(legacyuser, args.authz_extension)
+        dbutil.insert_new_user(new_user)
         legacy_ids_map.append([new_user.legacy_id, new_user.user_id])
 
 
-def transform_groups(dbconn, transform, args, legacy_ids_map):
-    legacygroups = DBUtils.get_legacy_groups(dbconn, args.legacydomain)
+def transform_groups(dbutil, transform, args, legacy_ids_map):
+    legacygroups = dbutil.get_legacy_groups(args.domain)
 
     for legacygroup in legacygroups:
-        new_group = transform.transform_group(legacygroup, args.newdomain)
-        DBUtils.insert_new_group(dbconn, new_group)
+        new_group = transform.transform_group(legacygroup, args.authz_extension)
+        dbutil.insert_new_group(new_group)
         legacy_ids_map.append([new_group.legacy_id, new_group.id])
 
 
-def transform_permissions(dbconn, idsmap):
-    DBUtils.insert_new_perms(dbconn, idsmap)
+def transform_permissions(dbutil, idsmap):
+    dbutil.insert_new_perms(idsmap)
+
+ENGINE_DB_ENV_KEYS = {
+    'host': 'host',
+    'port': 'port',
+    'secured': 'secured',
+    'hostValidation': 'hostValidation',
+    'user': 'user',
+    'password': 'password',
+    'database': 'database',
+}
+
+ENGINE_DB_ENV = {
+    'host': '10.34.63.31',
+    'port': '5432',
+    'secured': False,
+    'hostValidation': False,
+    'user': 'postgres',
+    'password': '',
+    'database': 'engine',
+}
+
+
+class AAAProfile(object):
+
+    EXT_PATH = '/etc/ovirt-engine/extensions.d/'
+
+    def __init__(self, profile, authn, authz):
+        self.profile = profile
+        self.authn = authn
+        self.authz = authz
+
+    def create_authz(self):
+        file = os.path.join(self.EXT_PATH, '%s.properties' % self.authz)
+        config = os.path.join(self.EXT_PATH, 'conf_%s.properties' % self.profile)
+        with open(file, 'w') as authz_file:
+            authz_file.write("ovirt.engine.extension.enabled = true\n")
+            authz_file.write("ovirt.engine.extension.name = %s\n" % self.authz)
+            authz_file.write("ovirt.engine.extension.bindings.method = jbossmodule\n")
+            authz_file.write("ovirt.engine.extension.binding.jbossmodule.module = org.ovirt.engine-extensions.aaa.ldap\n")
+            authz_file.write("ovirt.engine.extension.binding.jbossmodule.class = org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n")
+            authz_file.write("ovirt.engine.extension.provides = org.ovirt.engine.api.extensions.aaa.Authz\n")
+            authz_file.write("config.profile.file.1 = %s\n" % config)
+
+    def create_authn(self):
+        file = os.path.join(self.EXT_PATH, '%s.properties' % self.authn)
+        config = os.path.join(self.EXT_PATH, 'conf_%s.properties' % self.profile)
+        with open(file, 'w') as authn_file:
+            authn_file.write("ovirt.engine.extension.enabled = true\n")
+            authn_file.write("ovirt.engine.extension.name = %s\n" % self.profile)
+            authn_file.write("ovirt.engine.extension.bindings.method = jbossmodule\n")
+            authn_file.write("ovirt.engine.extension.binding.jbossmodule.module = org.ovirt.engine-extensions.aaa.ldap\n")
+            authn_file.write("ovirt.engine.extension.binding.jbossmodule.class = org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n")
+            authn_file.write("ovirt.engine.extension.provides = org.ovirt.engine.api.extensions.aaa.Authn\n")
+            authn_file.write("config.profile.file.1 = %s\n" % config)
+            authn_file.write("ovirt.engine.aaa.authn.profile.name = %s\n" % self.authn)
+            authn_file.write("ovirt.engine.aaa.authn.authz.plugin = %s\n" % self.authz)
+
+    def create_config(self, user, password, domain, provider='ad'):
+        config = os.path.join(self.EXT_PATH, 'conf_%s.properties' % self.profile)
+        with open(config, 'w') as conf_file:
+            conf_file.write("include = <%s.properties>\n\n" % provider)
+            conf_file.write("vars.user = %s\n" % user)
+            conf_file.write("vars.password = %s\n" % password)
+            conf_file.write("vars.domain = %s\n\n" % domain)
+            conf_file.write("pool.default.serverset.type = single\n")
+            conf_file.write("pool.default.serverset.single.server = ${global:vars.domain}\n")
+            conf_file.write("pool.default.auth.type = simple\n")
+            conf_file.write("pool.default.auth.simple.bindDN = ${global:vars.user}\n")
+            conf_file.write("pool.default.auth.simple.password = ${global:vars.password}\n")
 
 
 def main(args):
-    dbconn = DBConnection(args)
+    statement = Statement(
+        dbenvkeys=ENGINE_DB_ENV_KEYS,
+        environment=ENGINE_DB_ENV,
+    )
+    dbutil = DBUtils(statement)
+    user, password = dbutil.get_user_and_password_for_domain(
+        args.domain, args.prefix
+    )
+
     transform = Transform()
-    transform.connect(args.ldapuser, args.ldappassword, args.legacydomain)
+    transform.connect(user, password, args.domain)
     transform.obtain_namespaces()
+    user_dn = transform.get_user_dn(user)
+
+    aaaprofile = AAAProfile(args.profile, args.authn_name, args.authz_extension)
+    aaaprofile.create_authn()
+    aaaprofile.create_authz()
+    aaaprofile.create_config(user_dn, password, args.domain)
 
     legacy_ids_map = []
-    transform_users(dbconn, transform, args, legacy_ids_map)
-    transform_groups(dbconn, transform, args, legacy_ids_map)
-    transform_permissions(dbconn, legacy_ids_map)
-
-    dbconn.close()
+    transform_users(dbutil, transform, args, legacy_ids_map)
+    transform_groups(dbutil, transform, args, legacy_ids_map)
+    transform_permissions(dbutil, legacy_ids_map)
 
 
 if __name__ == "__main__":
