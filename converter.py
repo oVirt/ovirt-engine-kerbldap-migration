@@ -1,13 +1,16 @@
 #!/usr/bin/python
 import base64
 import glob
+import logging
 import os
 import subprocess
 import sys
 import uuid
+import datetime
 
 
 from M2Crypto import RSA
+
 
 try:
     import psycopg2
@@ -27,9 +30,27 @@ except ImportError:
     raise RuntimeError('Please install python-ldap')
 
 
-class Statement(object):
+class Base(object):
+    LOG_PREFIX = 'converter'
+
+    @property
+    def logger(self):
+        return self._logger
+
+    def __init__(self):
+        self._logger = logging.getLogger(
+            '%s.%s' % (
+                self.LOG_PREFIX,
+                self.__class__.__name__,
+            )
+        )
+
+class Statement(Base):
 
     _connection = None
+
+    def __init__(self):
+        super(Statement, self).__init__()
 
     def connect(
         self,
@@ -47,6 +68,20 @@ class Statement(object):
                 sslmode = 'verify-full'
             else:
                 sslmode = 'require'
+
+        self.logger.debug(
+            (
+                'entry host=%s, port=%s, secured=%s, '
+                'securedHostValidation=%s, user=%s, database=%s'
+            ),
+            host,
+            port,
+            secured,
+            securedHostValidation,
+            user,
+            database,
+        )
+
 
         #
         # old psycopg2 does not know how to ignore
@@ -78,6 +113,8 @@ class Statement(object):
         statement,
         args=dict(),
     ):
+        self.logger.debug('entry statement=%s %s', statement, args)
+
         ret = []
         cursor = None
         try:
@@ -116,7 +153,8 @@ class OptionDecrypt():
         pkcs12 = os.path.join(prefix, 'etc/pki/ovirt-engine/keys/engine.p12')
         password = 'mypass'
         self._rsa = RSA.load_key_string(
-            subprocess.Popen([
+            subprocess.Popen(
+                [
                     "openssl",
                     "pkcs12",
                     "-nocerts", "-nodes",
@@ -135,14 +173,14 @@ class OptionDecrypt():
         )
 
 
-class DBUtils(object):
+class VdcOptions(object):
 
-    def __init__(self, statement, optionDecrypt):
+    def __init__(self, statement):
         self._statement = statement
-        self._optionDecrypt = optionDecrypt
 
-    def __get_x_for_domain(self, domain, val):
-        x = None
+    def _get_option_for_domain(self, domain, val):
+        ret = None
+
         result = self._statement.execute(
             statement="""
                 select option_value
@@ -150,43 +188,38 @@ class DBUtils(object):
                 where option_name = %(val)s
             """,
             args=dict(
-                val=val
+                val=val,
             ),
         )
-        if len(result) <= 0:
-            return None
+        if result:
+            result = result[0]['option_value']
+            for val in result.split(','):
+                if val.startswith(domain + ':'):
+                    ret = val.split(':', 1)[1]
+                    break
 
-        result = result[0]['option_value']
-        for val in result.split(','):
-            if val.startswith(domain):
-                x = val[val.find(':') + 1:]
-                break
-
-        return x
-
-    def __get_password_for_domain(self, domain):
-        return self._optionDecrypt.decrypt(
-            self.__get_x_for_domain(domain, 'AdUserPassword')
-        )
-
-    def __get_user_name_for_domain(self, domain):
-        username = self.__get_x_for_domain(domain, 'AdUserName')
-        return username[:username.find('@')]
-
-    def __get_user_id_for_domain(self, domain):
-        return self.__get_x_for_domain(domain, 'AdUserId')
+        return ret
 
     def get_user_and_password_for_domain(self, domain):
-        user_name = self.__get_user_name_for_domain(domain)
-        user_id = self.__get_user_id_for_domain(domain)
-        password = self.__get_password_for_domain(domain)
+        return (
+            self._get_option_for_domain(
+                domain,
+                'AdUserName',
+            ).split('@')[0],
+            self._get_option_for_domain(domain, 'AdUserId'),
+            self._get_option_for_domain(domain, 'AdUserPassword'),
+        )
 
-        return user_name, user_id, password
 
-    def get_legacy_users(self, legacy_domain):
+class AAADAO(object):
+
+    def __init__(self, statement):
+        self._statement = statement
+
+    def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
             statement="""
-                select *
+                select user_id, username, external_id, last_admin_check_status, active
                 from users
                 where domain = %(legacy_domain)s
             """,
@@ -197,10 +230,11 @@ class DBUtils(object):
 
         return users
 
-    def get_legacy_groups(self, legacy_domain):
+    def fetchLegacyGroups(self, legacy_domain):
         groups = self._statement.execute(
             statement="""
-                select * from ad_groups
+                select id, name, external_id
+                from ad_groups
                 where domain = %(legacy_domain)s
             """,
             args=dict(
@@ -210,18 +244,21 @@ class DBUtils(object):
 
         return groups
 
-    def insert_new_perm(self, legacy_id, new_id):
+    def fetchLegacyPermissions(self, legacy_id):
         permission = self._statement.execute(
             statement="""
                 select *
                 from permissions
-                where ad_element_id =%(legacy_id)s
+                where ad_element_id = %(legacy_id)s
             """,
             args=dict(
                 legacy_id=legacy_id,
             ),
         )[0]
 
+        return permission
+
+    def insertPermission(self, permission):
         self._statement.execute(
             statement="""
                 insert into permissions (
@@ -238,280 +275,213 @@ class DBUtils(object):
                     %(object_type_id)s
                 )
             """,
-            args=dict(
-                id=str(uuid.uuid4()),
-                role_id=permission['role_id'],
-                ad_element_id=new_id,
-                object_id=permission['object_id'],
-                object_type_id=permission['object_type_id']
-            ),
+            args=permission,
         )
 
-    def insert_new_perms(self, useridsmap):
-        for userid_map in useridsmap:
-            self.insert_new_perm(
-                userid_map[0],
-                userid_map[1]
-            )
+    def insertUser(self, user):
+        user['_create_date'] = user['_update_date'] = datetime.datetime.now()
 
-    def insert_new_user(self, user):
         self._statement.execute(
             statement="""
                 insert into users (
-                    user_id, name, surname,
-                    domain, username, groups,
-                    department, role, email,
-                    note, last_admin_check_status,
-                    group_ids, external_id, active,
-                    _create_date, _update_date,
-                    namespace
+                    _create_date,
+                    _update_date,
+                    active,
+                    department,
+                    domain,
+                    email,
+                    external_id,
+                    group_ids,
+                    groups,
+                    last_admin_check_status,
+                    name,
+                    namespace,
+                    note,
+                    role,
+                    surname,
+                    user_id,
+                    username
                 ) values (
-                    %(user_id)s, %(name)s, %(surname)s,
-                    %(domain)s, %(username)s, %(groups)s,
-                    %(department)s, %(role)s, %(email)s,
-                    %(note)s, %(last_admin_check_status)s,
-                    %(group_ids)s, %(external_id)s, %(active)s,
-                    %(_create_date)s, %(_update_date)s,
-                    %(namespace)s
+                    %(_create_date)s,
+                    %(_update_date)s,
+                    %(active)s,
+                    %(department)s,
+                    %(domain)s,
+                    %(email)s,
+                    %(external_id)s,
+                    '',
+                    '',
+                    %(last_admin_check_status)s,
+                    %(name)s,
+                    %(namespace)s,
+                    '',
+                    '',
+                    %(surname)s,
+                    %(user_id)s,
+                    %(username)s
                 )
-         """,
-            args=dict(
-                user_id=user['user_id'],
-                name=user['name'],
-                surname=user['surname'],
-                domain=user['domain'],
-                username=user['username'],
-                groups=user['groups'],
-                department=user['department'],
-                role=user['role'],
-                email=user['email'],
-                note=user['note'],
-                last_admin_check_status=user['last_admin_check_status'],
-                group_ids=user['group_ids'],
-                external_id=user['external_id'],
-                active=user['active'],
-                _create_date=user['_create_date'],
-                _update_date=user['_update_date'],
-                namespace=user['namespace']
-            ),
+            """,
+            args=user,
         )
 
-    def insert_new_group(self, group):
+    def insertGroup(self, group):
         self._statement.execute(
             statement="""
                 insert into ad_groups (
+                    distinguishedname,
+                    domain,
+                    external_id,
                     id,
                     name,
-                    domain,
-                    distinguishedname,
-                    external_id,
                     namespace
                 ) values (
+                    '',
+                    %(domain)s,
+                    %(external_id)s,
                     %(id)s,
                     %(name)s,
-                    %(domain)s,
-                    %(distinguishedname)s,
-                    %(external_id)s,
                     %(namespace)s
                 )
             """,
-            args=dict(
-                id=group['id'],
-                name=group['name'],
-                domain=group['domain'],
-                distinguishedname=group['distinguishedname'],
-                external_id=group['external_id'],
-                namespace=group['namespace']
-            ),
+            args=group,
         )
 
 
-class LDAP(object):
+class LDAP(Base):
+
+    _username = None
+
+    def __init__(self, domain):
+        super(LDAP, self).__init__()
+        self._domain = domain
+
+    def getDomain(self):
+        return self._domain
 
     def connect(self, username, password, uri):
-        self.conn = ldap.initialize('ldap://%s:389' % uri)
-        self.conn.protocol_version = ldap.VERSION3
+        self.logger.debug("Connect uri='%s' user='%s'", uri, username)
+        self._conn = ldap.initialize('ldap://%s' % uri)
+        self._conn.protocol_version = ldap.VERSION3
+        self._conn.simple_bind_s(username, password)
+        self._username = username
 
-        self.conn.simple_bind_s(username, password)
-        #self.conn.whoami_s()
-
-    def _get_default_naming_context(self):
-        result = self.conn.search_s(
-            '',
-            ldap.SCOPE_BASE,
-            '(objectclass=*)',
-            ['defaultNamingContext']
+    def search(self, baseDN, scope, filter, attributes):
+        self.logger.debug(
+            "Search baseDN='%s', scope=%s, filter='%s', attributes=%s'",
+            baseDN,
+            scope,
+            filter,
+            attributes,
         )
-        return result[0][1]['defaultNamingContext'][0]
+        ret = self._conn.search_s(baseDN, scope, filter, attributes)
+        self.logger.debug('SearchResult: %s', ret)
+        return ret
+
+    def getUserName(self):
+        return self._username
+
+    def getNamespace(self):
+        pass
+
+    def getUser(self, entryId):
+        pass
+
+    def getGroup(self, entryId):
+        pass
 
 
 class ADLDAP(LDAP):
 
-    def __get_conf_naming_context(self):
-        result = self.conn.search_s(
+    def __init__(self, domain):
+        super(ADLDAP, self).__init__(domain)
+
+    def connect(self, username, password):
+        super(ADLDAP, self).connect(
+            '%s@%s' % (
+                username,
+                self.getDomain()
+            ),
+            password,
+            self.getDomain(),
+        )
+        self._conn.set_option(ldap.OPT_REFERRALS, 0)
+        self._configurationNamingContext = self.search(
             '',
             ldap.SCOPE_BASE,
             '(objectclass=*)',
             ['configurationNamingContext']
-        )
-        return result[0][1]['configurationNamingContext'][0]
-
-    def get_namespaces(self):
-        conf_name_context = self.__get_conf_naming_context()
-        result = self.conn.search_s(
-            'CN=Partitions,%s' % conf_name_context,
+        )[0][1]['configurationNamingContext'][0]
+        self._namespace = self.search(
+            'CN=Partitions,%s' % self._configurationNamingContext,
             ldap.SCOPE_SUBTREE,
-            '(&(objectClass=crossRef)(nETBIOSName=*))',
-            ['nCName']
-        )
-        return [res[1]['nCName'][0] for res in result]
+            '(&(objectClass=crossRef)(dnsRoot=%s)(nETBIOSName=*))' % (
+                self.getDomain(),
+            ),
+            ['nCName'],
+        )[0][1]['nCName'][0]
 
-    # TODO: AD specific
-    def get_ldap_user(self, search_base, legacyuser_id):
-        objectGuid = uuid.UUID(legacyuser_id).bytes_le
-        objectGuid = ldap.filter.escape_filter_chars(objectGuid)
-
-        result = self.conn.search_s(
-            'CN=Users,%s' % search_base,
+    def _getEntryById(self, fields, entryId):
+        ret = None
+        result = self.search(
+            self._namespace,
             ldap.SCOPE_SUBTREE,
-            '(objectGUID=%s)' % objectGuid
+            '(objectGUID=%s)' % ldap.filter.escape_filter_chars(
+                uuid.UUID(entryId).bytes_le
+            ),
+            fields,
         )
-        return result[0][1]
+        if result:
+            ret = result[0][1]
+        return ret
 
-    def get_ldap_group(self, search_base, legacygroup_id):
-        objectGuid = uuid.UUID(legacygroup_id).bytes_le
-        objectGuid = ldap.filter.escape_filter_chars(objectGuid)
+    def getNamespace(self):
+        return self._namespace
 
-        result = self.conn.search_s(
-            'CN=Users,%s' % search_base,
-            ldap.SCOPE_SUBTREE,
-            '(objectGUID=%s)' % objectGuid
+    def getUser(self, entryId):
+        user = self._getEntryById(
+            fields=[
+                'department',
+                'displayName',
+                'givenName',
+                'mail',
+                'name',
+                'objectGUID',
+                'sn',
+                'title',
+                'userPrincipalName',
+            ],
+            entryId=entryId,
         )
-        return result[0][1]
-
-
-class Transform(object):
-
-    def __init__(self):
-        self._namespaces = []
-        self._ad = None
-
-    def connect(self, user, password, domain):
-        username = '%s@%s' % (user, domain)
-        self._ad = ADLDAP()
-        self._ad.connect(username, password, domain)
-
-    def obtain_namespaces(self):
-        self._namespaces = self._ad.get_namespaces()
-
-    def get_user_dn(self, user):
-        return self._ad.get_ldap_user(
-            self._ad._get_default_naming_context(),
-            user
-        )['distinguishedName'][0]
-
-    def transform_group(self, legacygroup, newdomain):
-        legacygroup['legacy_id'] = legacygroup['id']
-        legacygroup['id'] = str(uuid.uuid4())
-        legacygroup['domain'] = newdomain
-
-        if legacygroup['distinguishedname'] is None:
-            legacygroup['distinguishedname'] = ''
-
-        # Actually, search within default naming context, since legacy do it
-        default_naming_context = self._ad._get_default_naming_context()
-        group = self._ad.get_ldap_group(
-            default_naming_context,
-            legacygroup['external_id']
+        return dict(
+            department=user.get('department', [''])[0],
+            email=user.get('mail', [''])[0],
+            external_id=base64.b64encode(user['objectGUID'][0]),
+            name=user.get('name', [''])[0],
+            namespace=self.getNamespace(),
+            surname=user.get('sn', [''])[0],
+            user_id=str(uuid.uuid4()),
+            username=user.get('userPrincipalName', [''])[0],
         )
 
-        legacygroup['name'] = group['name'][0]
-        legacygroup['namespace'] = self.find_user_namespace(
-            group['distinguishedName'][0]
+    def getGroup(self, entryId):
+        group = self._getEntryById(
+            fields=[
+                'description',
+                'name',
+                'objectGUID',
+            ],
+            entryId=entryId,
         )
-        # TODO: AD specific
-        legacygroup['external_id'] = base64.b64encode(group['objectGUID'][0])
-
-        return legacygroup
-
-    def transform_user(self, legacyuser, newdomain):
-        legacyuser['legacy_id'] = legacyuser['user_id']
-        legacyuser['user_id'] = str(uuid.uuid4())
-        legacyuser['domain'] = newdomain
-        legacyuser['group_ids'] = ''
-        legacyuser['groups'] = ''
-
-        if legacyuser['department'] is None:
-            legacyuser['department'] = ''
-        if legacyuser['email'] is None:
-            legacyuser['email'] = ''
-
-        # Actually, search within default naming context, since legacy do it
-        default_naming_context = self._ad._get_default_naming_context()
-        user = self._ad.get_ldap_user(
-            default_naming_context,
-            legacyuser['external_id']
+        return dict(
+            description=group.get('description', [''])[0],
+            external_id=base64.b64encode(group['objectGUID'][0]),
+            id=str(uuid.uuid4()),
+            name=group.get('name', [''])[0],
+            namespace=self.getNamespace(),
         )
 
-        legacyuser['username'] = user['userPrincipalName'][0]
-        legacyuser['namespace'] = self.find_user_namespace(
-            user['distinguishedName'][0]
-        )
-        # TODO: active directory specific
-        legacyuser['external_id'] = base64.b64encode(user['objectGUID'][0])
 
-        return legacyuser
-
-    def find_user_namespace(self, user_dn):
-        candidate = ""
-        for namespace in self._namespaces:
-            if (
-                user_dn.endswith("," + namespace) and
-                len(namespace) > len(candidate)
-            ):
-                candidate = namespace
-        return candidate if candidate else None
-
-
-class Transform2():
-
-    def __init__(self, dbutil, transform, domain, authzName):
-        self._dbutil = dbutil
-        self._transform = transform
-        self._domain = domain
-        self._authzName = authzName
-
-    def transform_users(self, legacy_ids_map):
-        legacyusers = self._dbutil.get_legacy_users(self._domain)
-
-        for legacyuser in legacyusers:
-            new_user = self._transform.transform_user(
-                legacyuser,
-                self._authzName
-            )
-            self._dbutil.insert_new_user(new_user)
-            legacy_ids_map.append([
-                new_user['legacy_id'], new_user['user_id']
-            ])
-
-    def transform_groups(self, legacy_ids_map):
-        legacygroups = self._dbutil.get_legacy_groups(self._domain)
-
-        for legacygroup in legacygroups:
-            new_group = self._transform.transform_group(
-                legacygroup,
-                self._authzName,
-            )
-            self._dbutil.insert_new_group(new_group)
-            legacy_ids_map.append([
-                new_group['legacy_id'], new_group['id']
-            ])
-
-    def transform_permissions(self, idsmap):
-        self._dbutil.insert_new_perms(idsmap)
-
-
-class AAAProfile(object):
+class AAAProfile(Base):
 
     _TMP_SUFFIX = '.tmp'
 
@@ -525,6 +495,8 @@ class AAAProfile(object):
         domain,
         prefix='/',
     ):
+        super(AAAProfile, self).__init__()
+
         extensionsDir = os.path.join(
             prefix,
             'etc/ovirt-engine/extensions.d',
@@ -561,88 +533,100 @@ class AAAProfile(object):
                 )
 
     def save(self):
-        try:
-            with open(
-                '%s%s' % (self._files['authzFile'], self._TMP_SUFFIX),
-                'w'
-            ) as f:
-                f.write(
-                    (
-                        "ovirt.engine.extension.name = {authzName}\n"
+        def _writelog(f, s):
+            self.logger.debug("Write '%s'\n%s", f, s)
 
-                        "ovirt.engine.extension.bindings.method = "
-                        "jbossmodule\n"
+        with open(
+            '%s%s' % (self._files['authzFile'], self._TMP_SUFFIX),
+            'w'
+        ) as f:
+            _writelog(
+                f,
+                (
+                    "ovirt.engine.extension.name = {authzName}\n"
 
-                        "ovirt.engine.extension.binding.jbossmodule.module = "
-                        "org.ovirt.engine-extensions.aaa.ldap\n"
+                    "ovirt.engine.extension.bindings.method = "
+                    "jbossmodule\n"
 
-                        "ovirt.engine.extension.binding.jbossmodule.class = "
-                        "org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n"
-                        "ovirt.engine.extension.provides = "
+                    "ovirt.engine.extension.binding.jbossmodule.module = "
+                    "org.ovirt.engine-extensions.aaa.ldap\n"
 
-                        "org.ovirt.engine.api.extensions.aaa.Authz\n"
-                        "config.profile.file.1 = {configFile}\n"
-                    ).format(**self._vars)
+                    "ovirt.engine.extension.binding.jbossmodule.class = "
+                    "org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n"
+                    "ovirt.engine.extension.provides = "
+
+                    "org.ovirt.engine.api.extensions.aaa.Authz\n"
+                    "config.profile.file.1 = {configFile}\n"
+                ).format(**self._vars)
+            )
+        with open(
+            '%s%s' % (self._files['authnFile'], self._TMP_SUFFIX),
+            'w'
+        ) as f:
+            _writelog(
+                f,
+                (
+                    "ovirt.engine.extension.name = {authnName}\n"
+
+                    "ovirt.engine.extension.bindings.method = "
+                    "jbossmodule\n"
+
+                    "ovirt.engine.extension.binding.jbossmodule.module = "
+                    "org.ovirt.engine-extensions.aaa.ldap\n"
+
+                    "ovirt.engine.extension.binding.jbossmodule.class = "
+                    "org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n"
+
+                    "ovirt.engine.extension.provides = "
+                    "org.ovirt.engine.api.extensions.aaa.Authn\n"
+
+                    "ovirt.engine.aaa.authn.profile.name = {profile}\n"
+                    "ovirt.engine.aaa.authn.authz.plugin = {authzName}\n"
+                    "config.profile.file.1 = {configFile}\n"
+                ).format(**self._vars)
+            )
+        with open(
+            '%s%s' % (self._files['configFile'], self._TMP_SUFFIX),
+            'w'
+        ) as f:
+            _writelog(
+                f,
+                (
+                    "include = <{provider}.properties>\n"
+                    "\n"
+                    "self._vars.user = {user}\n"
+                    "self._vars.password = {password}\n"
+                    "self._vars.domain = {domain}\n"
+                    "\n"
+                    "pool.default.serverset.type = single\n"
+
+                    "pool.default.serverset.single.server = "
+                    "${{global:self._vars.domain}}\n"
+
+                    "pool.default.auth.type = simple\n"
+
+                    "pool.default.auth.simple.bindDN = "
+                    "${{global:self._vars.user}}\n"
+
+                    "pool.default.auth.simple.password = "
+                    "${{global:self._vars.password}}\n"
+                ).format(
+                    provider='ad',  # TODO: AD specific
+                    user=self._user,
+                    password=self._password,
+                    domain=self._domain,
                 )
-            with open(
-                '%s%s' % (self._files['authnFile'], self._TMP_SUFFIX),
-                'w'
-            ) as f:
-                f.write(
-                    (
-                        "ovirt.engine.extension.name = {authnName}\n"
+            )
 
-                        "ovirt.engine.extension.bindings.method = "
-                        "jbossmodule\n"
+    def __enter__(self):
+        self.checkExisting()
+        return self
 
-                        "ovirt.engine.extension.binding.jbossmodule.module = "
-                        "org.ovirt.engine-extensions.aaa.ldap\n"
-
-                        "ovirt.engine.extension.binding.jbossmodule.class = "
-                        "org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n"
-
-                        "ovirt.engine.extension.provides = "
-                        "org.ovirt.engine.api.extensions.aaa.Authn\n"
-
-                        "ovirt.engine.aaa.authn.profile.name = {profile}\n"
-                        "ovirt.engine.aaa.authn.authz.plugin = {authzName}\n"
-                        "config.profile.file.1 = {configFile}\n"
-                    ).format(**self._vars)
-                )
-            with open(
-                '%s%s' % (self._files['configFile'], self._TMP_SUFFIX),
-                'w'
-            ) as f:
-                f.write(
-                    (
-                        "include = <{provider}.properties>\n"
-                        "\n"
-                        "self._vars.user = {user}\n"
-                        "self._vars.password = {password}\n"
-                        "self._vars.domain = {domain}\n"
-                        "\n"
-                        "pool.default.serverset.type = single\n"
-
-                        "pool.default.serverset.single.server = "
-                        "${{global:self._vars.domain}}\n"
-
-                        "pool.default.auth.type = simple\n"
-
-                        "pool.default.auth.simple.bindDN = "
-                        "${{global:self._vars.user}}\n"
-
-                        "pool.default.auth.simple.password = "
-                        "${{global:self._vars.password}}\n"
-                    ).format(
-                        provider='ad',  # TODO: AD specific
-                        user=self._user,
-                        password=self._password,
-                        domain=self._domain,
-                    )
-                )
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
             for f in self._files.values():
                 os.rename('%s%s' % (f, self._TMP_SUFFIX), f)
-        finally:
+        else:
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
@@ -660,6 +644,18 @@ def parse_args():
         '--prefix',
         default='/',
         help='for testing withing dev env'
+    )
+    parser.add_argument(
+        '--debug',
+        default=False,
+        action='store_true',
+        help='enable debug log'
+    )
+    parser.add_argument(
+        '--apply',
+        default=False,
+        action='store_true',
+        help='apply settings'
     )
     parser.add_argument(
         '--domain',
@@ -695,8 +691,45 @@ def parse_args():
     return args
 
 
+def setupLogger(debug=False):
+    logger = logging.getLogger(Base.LOG_PREFIX)
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    try:
+        h = logging.StreamHandler()
+        if not debug:
+            h.setLevel(logging.INFO)
+            h.setFormatter(
+                logging.Formatter(
+                    fmt=(
+                        '[%(levelname)-7s] '
+                        '%(message)s'
+                    ),
+                ),
+            )
+        else:
+            h.setLevel(logging.DEBUG)
+            h.setFormatter(
+                logging.Formatter(
+                    fmt=(
+                        '%(asctime)-15s '
+                        '[%(levelname)-7s] '
+                        '%(name)s.%(funcName)s:%(lineno)d '
+                        '%(message)s'
+                    ),
+                ),
+            )
+        logger.addHandler(h)
+    except IOError:
+        logging.warning('Cannot initialize logging', exc_info=True)
+
+
 def main():
     args = parse_args()
+    setupLogger(debug=args.debug)
+    logger = logging.getLogger(Base.LOG_PREFIX)
+    logger.debug('Arguments: %s', args)
 
     if args.prefix == '/':
         engineDir = os.path.join(
@@ -743,6 +776,7 @@ def main():
     )
 
     statement = Statement()
+    logger.info('Connecting to database')
     statement.connect(
         host=engineConfig.get('ENGINE_DB_HOST'),
         port=engineConfig.get('ENGINE_DB_PORT'),
@@ -756,39 +790,105 @@ def main():
     )
 
     with statement:
-        dbUtils = DBUtils(
-            statement=statement,
-            optionDecrypt=OptionDecrypt(prefix=args.prefix),
-        )
-        user_name, user_id, password = dbUtils.get_user_and_password_for_domain(args.domain)
-        transform = Transform()
-        transform.connect(user_name, password, args.domain)
-        transform.obtain_namespaces()
-        user_dn = transform.get_user_dn(user_id)
+        #@ALON: fail if we have anything in database for authzName
+        #before any change
 
-        aaaprofile = AAAProfile(
+        logger.info('Loading options')
+        (
+            user_name,
+            user_id,
+            password,
+        ) = VdcOptions(statement).get_user_and_password_for_domain(args.domain)
+        password = OptionDecrypt(prefix=args.prefix).decrypt(password)
+
+        logger.info("Connecting to ldap '%s' using '%s'", args.domain, user_name)
+        driver = ADLDAP(args.domain)
+        driver.connect(user_name, password)
+
+        with AAAProfile(
             profile=args.profile,
             authnName=args.authnName,
             authzName=args.authzName,
-            user=user_dn,
+            user=driver.getUserName(),
             password=password,
             domain=args.domain,
-        )
-        aaaprofile.checkExisting()
+            prefix=args.prefix,
+        ) as aaaprofile:
+            aaadao = AAADAO(statement)
 
-        legacy_ids_map = []
-        transform2 = Transform2(
-            dbutil=dbUtils,
-            transform=transform,
-            domain=args.domain,
-            authzName=args.authzName,
-        )
-        transform2.transform_users(legacy_ids_map)
-        transform2.transform_groups(legacy_ids_map)
-        transform2.transform_permissions(legacy_ids_map)
+            logger.info('Converting users')
+            users = []
+            for legacyUser in aaadao.fetchLegacyUsers(args.domain):
+                logger.debug("Converting user '%s'", legacyUser['username'])
+                e = driver.getUser(entryId=legacyUser['external_id'])
+                if e is None:
+                    logger.warning(
+                        (
+                            "User '%s' id '%s' could not be found, "
+                            "probably deleted from directory"
+                        ),
+                        legacyUser['external_id'],
+                        legacyUser['username'],
+                    )
+                else:
+                    e['user_id.old'] = legacyUser['user_id']
+                    e['domain'] = args.profile
+                    e['last_admin_check_status'] = legacyUser['last_admin_check_status']
+                    e['active'] = legacyUser['active']
+                    users.append(e)
 
-        aaaprofile.save()
+            logger.info('Converting groups')
+            groups = []
+            for legacyGroup in aaadao.fetchLegacyGroups(args.domain):
+                logger.debug("Converting group '%s'", legacyGroup['name'])
+                e = driver.getGroup(entryId=legacyGroup['external_id'])
+                if e is None:
+                    logger.warning(
+                        (
+                            "Group '%s' id '%s' could not be found, "
+                            "probably deleted from directory"
+                        ),
+                        legacyGroup['external_id'],
+                        legacyGroup['name'],
+                    )
+                else:
+                    e['id.old'] = legacyGroup['id']
+                    e['domain'] = args.profile
+                    groups.append(e)
 
+            logger.info('Converting permissions')
+            permissions = []
+
+            logger.info('Adding new users')
+            for user in users:
+                aaadao.insertUser(user)
+
+                permission = aaadao.fetchLegacyPermissions(user['user_id.old'])
+                permission['id'] = str(uuid.uuid4())
+                permission['ad_element_id'] = user['user_id']
+                permissions.append(permission)
+
+            logger.info('Adding new groups')
+            for group in groups:
+                aaadao.insertGroup(group)
+
+                permission = aaadao.fetchLegacyPermissions(group['id.old'])
+                permission['id'] = str(uuid.uuid4())
+                permission['ad_element_id'] = group['id']
+                permissions.append(permission)
+
+            logger.info('Adding new permissions')
+            for permission in permissions:
+                aaadao.insertPermission(permission)
+
+            logger.info('Creating new extensions configuration')
+            aaaprofile.save()
+
+            if not args.apply:
+                raise RuntimeError('Apply was not specified rolling back')
+            logger.warn(
+                'Please consider to setup ssl, as default configuration use plain'
+            )
 
 if __name__ == "__main__":
     main()
