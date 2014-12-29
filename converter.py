@@ -275,23 +275,10 @@ class AAADAO(object):
 
         return groups
 
-    def fetchLegacyPermissions(self, legacy_id):
-        ret = None
-
-        permissions = self._statement.execute(
-            statement="""
-                select *
-                from permissions
-                where ad_element_id = %(legacy_id)s
-            """,
-            args=dict(
-                legacy_id=legacy_id,
-            ),
+    def fetchAllPermissions(self):
+        return self._statement.execute(
+            statement="""select * from permissions""",
         )
-        if permissions:
-            ret = permissions
-
-        return ret
 
     def insertPermission(self, permission):
         self._statement.execute(
@@ -528,22 +515,24 @@ class IPALDAP(LDAP):
                 'ipaUniqueID',
                 'sn',
                 'dn',
+                'uid',
             ],
             entryId=entryId,
         )
         return dict(
             department='',  # TODO: is this in IPA entry?
             email=user.get('mail', [''])[0],
-            external_id=base64.b64encode(user['ipaUniqueID'][0]),
+            external_id=user['ipaUniqueID'][0],
             name=user.get('cn', [''])[0],
             namespace=self.getNamespace(),
             surname=user.get('sn', [''])[0],
             user_id=str(uuid.uuid4()),
-            username=user.get('dn', ['']),
+            username=user.get('uid', [''])[0],
+            dn=user.get('dn', ['']),
         )
 
     def getUserDN(self, entryId):
-        return self.getUser(entryId)['username']
+        return self.getUser(entryId)['dn']
 
     def getGroup(self, entryId):
         group = self._getEntryById(
@@ -556,7 +545,7 @@ class IPALDAP(LDAP):
         )
         return dict(
             description=group.get('description', [''])[0],
-            external_id=base64.b64encode(group['ipaUniqueID'][0]),
+            external_id=group['ipaUniqueID'][0],
             id=str(uuid.uuid4()),
             name=group.get('cn', [''])[0],
             namespace=self.getNamespace(),
@@ -1076,7 +1065,7 @@ def convert(args, engineDir):
             prefix=args.prefix,
         ) as aaaprofile:
             logger.info('Converting users')
-            users = []
+            users = {}
             for legacyUser in aaadao.fetchLegacyUsers(args.domain):
                 logger.debug("Converting user '%s'", legacyUser['username'])
                 e = driver.getUser(entryId=legacyUser['external_id'])
@@ -1095,10 +1084,10 @@ def convert(args, engineDir):
                     e['last_admin_check_status'] = legacyUser[
                         'last_admin_check_status'
                     ]
-                    users.append(e)
+                    users[e['user_id.old']] = e
 
             logger.info('Converting groups')
-            groups = []
+            groups = {}
             for legacyGroup in aaadao.fetchLegacyGroups(args.domain):
                 logger.debug("Converting group '%s'", legacyGroup['name'])
                 e = driver.getGroup(entryId=legacyGroup['external_id'])
@@ -1114,33 +1103,29 @@ def convert(args, engineDir):
                 else:
                     e['id.old'] = legacyGroup['id']
                     e['domain'] = args.authzName
-                    groups.append(e)
-
-            logger.info('Converting permissions')
-            permissions = []
-            for user in users:
-                perms = aaadao.fetchLegacyPermissions(user['user_id.old'])
-                if perms is not None:
-                    for perm in perms:
-                        perm['id'] = str(uuid.uuid4())
-                        perm['ad_element_id'] = user['user_id']
-                        permissions.append(perm)
-
-            for group in groups:
-                perms = aaadao.fetchLegacyPermissions(group['id.old'])
-                if perms is not None:
-                    for perm in perms:
-                        perm['id'] = str(uuid.uuid4())
-                        perm['ad_element_id'] = group['id']
-                        permissions.append(perm)
+                    groups[e['id.old']] = e
 
             logger.info('Adding new users')
-            for user in users:
+            for user in users.values():
                 aaadao.insertUser(user)
 
             logger.info('Adding new groups')
-            for group in groups:
+            for group in groups.values():
                 aaadao.insertGroup(group)
+
+            logger.info('Converting permissions')
+            permissions = []
+            for perm in aaadao.fetchAllPermissions():
+                if perm['ad_element_id'] in groups.keys():
+                    perm['id'] = str(uuid.uuid4())
+                    perm['ad_element_id'] = group[perm['ad_element_id']]['id']
+                    permissions.append(perm)
+                elif perm['ad_element_id'] in users.keys():
+                    perm['id'] = str(uuid.uuid4())
+                    perm['ad_element_id'] = users[
+                        perm['ad_element_id']
+                    ]['user_id']
+                    permissions.append(perm)
 
             logger.info('Adding new permissions')
             for permission in permissions:
