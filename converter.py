@@ -213,8 +213,9 @@ class VdcOptions(object):
 
 class AAADAO(object):
 
-    def __init__(self, statement):
+    def __init__(self, statement, legacy):
         self._statement = statement
+        self._legacy = legacy
 
     def isDomainExists(self, new_profile):
         users = self._statement.execute(
@@ -302,43 +303,50 @@ class AAADAO(object):
         self._statement.execute(
             statement="""
                 insert into users (
+                    {legacyNames}
                     _create_date,
                     _update_date,
-                    active,
                     department,
                     domain,
                     email,
                     external_id,
-                    group_ids,
-                    groups,
                     last_admin_check_status,
                     name,
                     namespace,
                     note,
-                    role,
                     surname,
                     user_id,
                     username
                 ) values (
+                    {legacyValues}
                     now(),
                     now(),
-                    True,
                     %(department)s,
                     %(domain)s,
                     %(email)s,
                     %(external_id)s,
-                    '',
-                    '',
                     %(last_admin_check_status)s,
                     %(name)s,
                     %(namespace)s,
-                    '',
                     '',
                     %(surname)s,
                     %(user_id)s,
                     %(username)s
                 )
-            """,
+            """.format(
+                legacyNames="""
+                    active,
+                    group_ids,
+                    groups,
+                    role,
+                """ if self._legacy else '',
+                legacyValues="""
+                    True,
+                    '',
+                    '',
+                    ''
+                """ if self._legacy else '',
+            ),
             args=user,
         )
 
@@ -681,6 +689,12 @@ def parse_args():
         help='write log into file'
     )
     parser.add_argument(
+        '--legacy',
+        default=False,
+        action='store_true',
+        help='use legacy engine'
+    )
+    parser.add_argument(
         '--apply',
         default=False,
         action='store_true',
@@ -792,7 +806,7 @@ def convert(args, engineDir):
     )
 
     with statement:
-        aaadao = AAADAO(statement)
+        aaadao = AAADAO(statement, args.legacy)
         if aaadao.isDomainExists(args.authzName):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % args.domain
