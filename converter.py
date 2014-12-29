@@ -214,7 +214,11 @@ class VdcOptions(object):
         )
 
     def get_provider_type(self, domain):
-        return self._get_option_for_domain(domain, 'LDAPProviderTypes')
+        provider = self._get_option_for_domain(domain, 'LDAPProviderTypes')
+        if provider == 'activeDirectory':
+            provider = 'ad'
+
+        return provider.lower()
 
 
 class AAADAO(object):
@@ -658,7 +662,7 @@ class LDAPDriver():
 
     @staticmethod
     def createDriver(domain, provider):
-        if provider == 'activeDirectory':
+        if provider == 'ad':
             return ADLDAP(domain)
         elif provider == 'ipa':
             return IPALDAP(domain)
@@ -676,6 +680,7 @@ class AAAProfile(Base):
         authnName,
         authzName,
         user,
+        provider,
         password,
         domain,
         cacert=None,
@@ -691,6 +696,7 @@ class AAAProfile(Base):
         self._password = password
         self._domain = domain
         self._cacert = cacert
+        self._provider = provider
         self._vars = dict(
             authnName=authnName,
             authzName=authzName,
@@ -845,7 +851,7 @@ class AAAProfile(Base):
 
                     "pool.default.ssl.truststore.password = changeit"
                 ).format(
-                    provider='ad',  # TODO: AD specific
+                    provider=self._provider,
                     user=self._user,
                     password=self._password,
                     domain=self._domain,
@@ -1063,6 +1069,7 @@ def convert(args, engineDir):
             authnName=args.authnName,
             authzName=args.authzName,
             user=driver.getUserDN(user_id),
+            provider=provider,
             password=password,
             domain=args.domain,
             cacert=args.cacert,
