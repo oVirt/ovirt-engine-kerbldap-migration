@@ -266,6 +266,8 @@ class AAADAO(object):
         return groups
 
     def fetchLegacyPermissions(self, legacy_id):
+        ret = None
+
         permission = self._statement.execute(
             statement="""
                 select *
@@ -275,9 +277,11 @@ class AAADAO(object):
             args=dict(
                 legacy_id=legacy_id,
             ),
-        )[0]
+        )
+        if permission:
+            ret = permission[0]
 
-        return permission
+        return ret
 
     def insertPermission(self, permission):
         self._statement.execute(
@@ -891,18 +895,20 @@ def convert(args, engineDir):
                 aaadao.insertUser(user)
 
                 permission = aaadao.fetchLegacyPermissions(user['user_id.old'])
-                permission['id'] = str(uuid.uuid4())
-                permission['ad_element_id'] = user['user_id']
-                permissions.append(permission)
+                if permission is not None:
+                    permission['id'] = str(uuid.uuid4())
+                    permission['ad_element_id'] = user['user_id']
+                    permissions.append(permission)
 
             logger.info('Adding new groups')
             for group in groups:
                 aaadao.insertGroup(group)
 
                 permission = aaadao.fetchLegacyPermissions(group['id.old'])
-                permission['id'] = str(uuid.uuid4())
-                permission['ad_element_id'] = group['id']
-                permissions.append(permission)
+                if permission is not None:
+                    permission['id'] = str(uuid.uuid4())
+                    permission['ad_element_id'] = group['id']
+                    permissions.append(permission)
 
             logger.info('Adding new permissions')
             for permission in permissions:
