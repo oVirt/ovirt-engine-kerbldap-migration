@@ -45,6 +45,7 @@ class Base(object):
             )
         )
 
+
 class Statement(Base):
 
     _connection = None
@@ -81,7 +82,6 @@ class Statement(Base):
             user,
             database,
         )
-
 
         #
         # old psycopg2 does not know how to ignore
@@ -219,7 +219,12 @@ class AAADAO(object):
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
             statement="""
-                select user_id, username, external_id, last_admin_check_status, active
+                select
+                    user_id,
+                    username,
+                    external_id,
+                    last_admin_check_status,
+                    active
                 from users
                 where domain = %(legacy_domain)s
             """,
@@ -633,6 +638,10 @@ class AAAProfile(Base):
                     os.unlink(tmp_file)
 
 
+class RollbackError(RuntimeError):
+    pass
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -650,6 +659,12 @@ def parse_args():
         default=False,
         action='store_true',
         help='enable debug log'
+    )
+    parser.add_argument(
+        '--log',
+        metavar='FILE',
+        default=None,
+        help='write log into file'
     )
     parser.add_argument(
         '--apply',
@@ -691,25 +706,27 @@ def parse_args():
     return args
 
 
-def setupLogger(debug=False):
+def setupLogger(log=None, debug=False):
     logger = logging.getLogger(Base.LOG_PREFIX)
     logger.propagate = False
     logger.setLevel(logging.DEBUG)
 
     try:
         h = logging.StreamHandler()
-        if not debug:
-            h.setLevel(logging.INFO)
-            h.setFormatter(
-                logging.Formatter(
-                    fmt=(
-                        '[%(levelname)-7s] '
-                        '%(message)s'
-                    ),
+        h.setLevel(logging.INFO)
+        h.setFormatter(
+            logging.Formatter(
+                fmt=(
+                    '[%(levelname)-7s] '
+                    '%(message)s'
                 ),
-            )
-        else:
-            h.setLevel(logging.DEBUG)
+            ),
+        )
+        logger.addHandler(h)
+
+        if log is not None:
+            h = logging.StreamHandler(stream=open(log, 'w'))
+            h.setLevel(logging.DEBUG if debug else logging.INFO)
             h.setFormatter(
                 logging.Formatter(
                     fmt=(
@@ -720,42 +737,13 @@ def setupLogger(debug=False):
                     ),
                 ),
             )
-        logger.addHandler(h)
+            logger.addHandler(h)
     except IOError:
         logging.warning('Cannot initialize logging', exc_info=True)
 
 
-def main():
-    args = parse_args()
-    setupLogger(debug=args.debug)
+def convert(args, engineDir):
     logger = logging.getLogger(Base.LOG_PREFIX)
-    logger.debug('Arguments: %s', args)
-
-    if args.prefix == '/':
-        engineDir = os.path.join(
-            args.prefix,
-            'usr',
-            'share',
-            'ovirt-engine',
-        )
-    else:
-        sys.path.insert(
-            0,
-            glob.glob(
-                os.path.join(
-                    args.prefix,
-                    'usr',
-                    'lib*',
-                    'python*',
-                    'site-packages'
-                )
-            )[0]
-        )
-        engineDir = os.path.join(
-            args.prefix,
-            'share',
-            'ovirt-engine',
-        )
 
     from ovirt_engine import configfile
     engineConfig = configfile.ConfigFile(
@@ -801,7 +789,11 @@ def main():
         ) = VdcOptions(statement).get_user_and_password_for_domain(args.domain)
         password = OptionDecrypt(prefix=args.prefix).decrypt(password)
 
-        logger.info("Connecting to ldap '%s' using '%s'", args.domain, user_name)
+        logger.info(
+            "Connecting to ldap '%s' using '%s'",
+            args.domain,
+            user_name,
+        )
         driver = ADLDAP(args.domain)
         driver.connect(user_name, password)
 
@@ -833,7 +825,9 @@ def main():
                 else:
                     e['user_id.old'] = legacyUser['user_id']
                     e['domain'] = args.profile
-                    e['last_admin_check_status'] = legacyUser['last_admin_check_status']
+                    e['last_admin_check_status'] = legacyUser[
+                        'last_admin_check_status'
+                    ]
                     e['active'] = legacyUser['active']
                     users.append(e)
 
@@ -885,13 +879,60 @@ def main():
             aaaprofile.save()
 
             if not args.apply:
-                raise RuntimeError('Apply was not specified rolling back')
+                raise RollbackError('Apply was not specified rolling back')
+
             logger.warn(
-                'Please consider to setup ssl, as default configuration use plain'
+                'Please consider to setup ssl, as default configuration '
+                'use plain'
             )
 
+
+def main():
+    args = parse_args()
+    setupLogger(log=args.log, debug=args.debug)
+    logger = logging.getLogger(Base.LOG_PREFIX)
+    logger.debug('Arguments: %s', args)
+
+    if args.prefix == '/':
+        engineDir = os.path.join(
+            args.prefix,
+            'usr',
+            'share',
+            'ovirt-engine',
+        )
+    else:
+        sys.path.insert(
+            0,
+            glob.glob(
+                os.path.join(
+                    args.prefix,
+                    'usr',
+                    'lib*',
+                    'python*',
+                    'site-packages'
+                )
+            )[0]
+        )
+        engineDir = os.path.join(
+            args.prefix,
+            'share',
+            'ovirt-engine',
+        )
+
+    ret = 1
+    try:
+        convert(args, engineDir)
+        ret = 0
+    except RollbackError as e:
+        logger.warning('%s', e)
+    except Exception as e:
+        logger.error('Conversion failed: %s', e)
+        logger.debug('Exception', exc_info=True)
+    return ret
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 
 
 # vim: expandtab tabstop=4 shiftwidth=4
