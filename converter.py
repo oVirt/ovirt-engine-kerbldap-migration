@@ -45,6 +45,7 @@ class Base(object):
             )
         )
 
+
 class Statement(Base):
 
     _connection = None
@@ -81,7 +82,6 @@ class Statement(Base):
             user,
             database,
         )
-
 
         #
         # old psycopg2 does not know how to ignore
@@ -219,7 +219,12 @@ class AAADAO(object):
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
             statement="""
-                select user_id, username, external_id, last_admin_check_status, active
+                select
+                    user_id,
+                    username,
+                    external_id,
+                    last_admin_check_status,
+                    active
                 from users
                 where domain = %(legacy_domain)s
             """,
@@ -801,7 +806,11 @@ def main():
         ) = VdcOptions(statement).get_user_and_password_for_domain(args.domain)
         password = OptionDecrypt(prefix=args.prefix).decrypt(password)
 
-        logger.info("Connecting to ldap '%s' using '%s'", args.domain, user_name)
+        logger.info(
+            "Connecting to ldap '%s' using '%s'",
+            args.domain,
+            user_name,
+        )
         driver = ADLDAP(args.domain)
         driver.connect(user_name, password)
 
@@ -833,7 +842,9 @@ def main():
                 else:
                     e['user_id.old'] = legacyUser['user_id']
                     e['domain'] = args.profile
-                    e['last_admin_check_status'] = legacyUser['last_admin_check_status']
+                    e['last_admin_check_status'] = legacyUser[
+                        'last_admin_check_status'
+                    ]
                     e['active'] = legacyUser['active']
                     users.append(e)
 
@@ -887,7 +898,8 @@ def main():
             if not args.apply:
                 raise RuntimeError('Apply was not specified rolling back')
             logger.warn(
-                'Please consider to setup ssl, as default configuration use plain'
+                'Please consider to setup ssl, as default configuration '
+                'use plain'
             )
 
 if __name__ == "__main__":
