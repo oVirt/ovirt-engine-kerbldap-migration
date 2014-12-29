@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 import uuid
-import datetime
 
 
 from M2Crypto import RSA
@@ -300,8 +299,6 @@ class AAADAO(object):
         )
 
     def insertUser(self, user):
-        user['_create_date'] = user['_update_date'] = datetime.datetime.now()
-
         self._statement.execute(
             statement="""
                 insert into users (
@@ -323,8 +320,8 @@ class AAADAO(object):
                     user_id,
                     username
                 ) values (
-                    %(_create_date)s,
-                    %(_update_date)s,
+                    now(),
+                    now(),
                     True,
                     %(department)s,
                     %(domain)s,
