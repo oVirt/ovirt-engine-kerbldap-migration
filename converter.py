@@ -146,24 +146,30 @@ class Statement(Base):
         self._connection.close()
 
 
-class OptionDecrypt():
+class OptionDecrypt(Base):
 
     def __init__(self, prefix='/'):
+        super(OptionDecrypt, self).__init__()
         pkcs12 = os.path.join(prefix, 'etc/pki/ovirt-engine/keys/engine.p12')
         password = 'mypass'
-        self._rsa = RSA.load_key_string(
-            subprocess.Popen(
-                [
-                    "openssl",
-                    "pkcs12",
-                    "-nocerts", "-nodes",
-                    "-in", pkcs12,
-                    "-passin", "pass:%s" % password,
-                ],
-                stderr=subprocess.STDOUT,
-                stdout=subprocess.PIPE
-            ).communicate()[0]
+        p = subprocess.Popen(
+            [
+                "openssl",
+                "pkcs12",
+                "-nocerts", "-nodes",
+                "-in", pkcs12,
+                "-passin", "pass:%s" % password,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+        stdout, stderr = p.communicate()
+
+        if p.wait() != 0:
+            self.logger.debug('openssl stderr: %s', stderr)
+            raise RuntimeError('Failed to execute openssl')
+
+        self._rsa = RSA.load_key_string(stdout)
 
     def decrypt(self, s):
         return self._rsa.private_decrypt(
@@ -388,10 +394,18 @@ class LDAP(Base):
     def getDomain(self):
         return self._domain
 
-    def connect(self, username, password, uri):
+    def connect(self, username, password, uri, cacert=None):
         self.logger.debug("Connect uri='%s' user='%s'", uri, username)
         self._conn = ldap.initialize('ldap://%s' % uri)
-        self._conn.protocol_version = ldap.VERSION3
+        if cacert is not None:
+            self._conn.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
+            self._conn.set_option(
+                ldap.OPT_X_TLS_REQUIRE_CERT,
+                ldap.OPT_X_TLS_DEMAND
+            )
+            # does not work per connection?
+            ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, cacert)
+            self._conn.start_tls_s()
         self._conn.simple_bind_s(username, password)
         self._username = username
 
@@ -425,7 +439,7 @@ class ADLDAP(LDAP):
     def __init__(self, domain):
         super(ADLDAP, self).__init__(domain)
 
-    def connect(self, username, password):
+    def connect(self, username, password, cacert):
         super(ADLDAP, self).connect(
             '%s@%s' % (
                 username,
@@ -433,6 +447,7 @@ class ADLDAP(LDAP):
             ),
             password,
             self.getDomain(),
+            cacert,
         )
         self._conn.set_option(ldap.OPT_REFERRALS, 0)
         self._configurationNamingContext = self.search(
@@ -523,6 +538,7 @@ class AAAProfile(Base):
         user,
         password,
         domain,
+        cacert=None,
         prefix='/',
     ):
         super(AAAProfile, self).__init__()
@@ -534,16 +550,23 @@ class AAAProfile(Base):
         self._user = user
         self._password = password
         self._domain = domain
+        self._cacert = cacert
         self._vars = dict(
             authnName=authnName,
             authzName=authzName,
             profile=profile,
-            configFile=os.path.join('..', '%s.properties' % profile),
+            configFile=os.path.join('..', 'aaa', '%s.properties' % profile),
         )
         self._files = dict(
             configFile=os.path.join(
                 extensionsDir,
                 self._vars['configFile']
+            ),
+            trustStore=os.path.join(
+                extensionsDir,
+                '..',
+                'aaa',
+                'ca.jks',
             ),
             authzFile=os.path.join(
                 extensionsDir,
@@ -566,6 +589,38 @@ class AAAProfile(Base):
         def _writelog(f, s):
             self.logger.debug("Write '%s'\n%s", f, s)
             f.write(s)
+
+        if not os.path.exists(os.path.dirname(self._files['configFile'])):
+            os.makedirs(os.path.dirname(self._files['configFile']))
+
+        if self._cacert is not None:
+            from ovirt_engine import java
+            p = subprocess.Popen(
+                [
+                    os.path.join(
+                        java.Java().getJavaHome(),
+                        'bin',
+                        'keytool'
+                    ),
+                    '-importcert',
+                    '-noprompt',
+                    '-trustcacerts',
+                    '-storetype', 'JKS',
+                    '-keystore', '%s%s' % (
+                        self._files['trustStore'],
+                        self._TMP_SUFFIX,
+                    ),
+                    '-storepass', 'changeit',
+                    '-file', self._cacert,
+                    '-alias', 'myca',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, stderr = p.communicate()
+            self.logger.debug('keytool stdout: %s, stderr: %s', stdout, stderr)
+            if p.wait() != 0:
+                raise RuntimeError('Failed to execute keytool')
 
         with open(
             '%s%s' % (self._files['authzFile'], self._TMP_SUFFIX),
@@ -641,11 +696,19 @@ class AAAProfile(Base):
 
                     "pool.default.auth.simple.password = "
                     "${{global:self._vars.password}}\n"
+
+                    "pool.default.ssl.startTLS = {startTLS}\n"
+
+                    "pool.default.ssl.truststore.file = "
+                    "${{local:_basedir}}/ca.jks\n"
+
+                    "pool.default.ssl.truststore.password = changeit"
                 ).format(
                     provider='ad',  # TODO: AD specific
                     user=self._user,
                     password=self._password,
                     domain=self._domain,
+                    startTLS='true' if self._cacert else 'false',
                 )
             )
 
@@ -699,6 +762,15 @@ def parse_args():
         help='use legacy engine'
     )
     parser.add_argument(
+        '--cacert',
+        metavar='FILE',
+        required=True,
+        help=(
+            'certificate chain to use for ssl, '
+            'or "NONE" if you do not want SSL'
+        ),
+    )
+    parser.add_argument(
         '--apply',
         default=False,
         action='store_true',
@@ -734,6 +806,9 @@ def parse_args():
 
     if not args.profile:
         args.profile = '%s-new' % args.domain
+
+    if args.cacert == 'NONE':
+        args.cacert = None
 
     return args
 
@@ -835,7 +910,11 @@ def convert(args, engineDir):
             user_name,
         )
         driver = ADLDAP(args.domain)
-        driver.connect(user_name, password)
+        driver.connect(
+            user_name,
+            password,
+            cacert=args.cacert,
+        )
 
         with AAAProfile(
             profile=args.profile,
@@ -844,6 +923,7 @@ def convert(args, engineDir):
             user=driver.getUserName(),
             password=password,
             domain=args.domain,
+            cacert=args.cacert,
             prefix=args.prefix,
         ) as aaaprofile:
             logger.info('Converting users')
@@ -919,11 +999,6 @@ def convert(args, engineDir):
 
             if not args.apply:
                 raise RollbackError('Apply was not specified rolling back')
-
-            logger.warn(
-                'Please consider to setup ssl, as default configuration '
-                'use plain'
-            )
 
 
 def main():
