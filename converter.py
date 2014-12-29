@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 import uuid
-import datetime
 
 
 from M2Crypto import RSA
@@ -214,8 +213,9 @@ class VdcOptions(object):
 
 class AAADAO(object):
 
-    def __init__(self, statement):
+    def __init__(self, statement, legacy):
         self._statement = statement
+        self._legacy = legacy
 
     def isDomainExists(self, new_profile):
         users = self._statement.execute(
@@ -266,6 +266,8 @@ class AAADAO(object):
         return groups
 
     def fetchLegacyPermissions(self, legacy_id):
+        ret = None
+
         permission = self._statement.execute(
             statement="""
                 select *
@@ -275,9 +277,11 @@ class AAADAO(object):
             args=dict(
                 legacy_id=legacy_id,
             ),
-        )[0]
+        )
+        if permission:
+            ret = permission[0]
 
-        return permission
+        return ret
 
     def insertPermission(self, permission):
         self._statement.execute(
@@ -300,48 +304,53 @@ class AAADAO(object):
         )
 
     def insertUser(self, user):
-        user['_create_date'] = user['_update_date'] = datetime.datetime.now()
-
         self._statement.execute(
             statement="""
                 insert into users (
+                    {legacyNames}
                     _create_date,
                     _update_date,
-                    active,
                     department,
                     domain,
                     email,
                     external_id,
-                    group_ids,
-                    groups,
                     last_admin_check_status,
                     name,
                     namespace,
                     note,
-                    role,
                     surname,
                     user_id,
                     username
                 ) values (
-                    %(_create_date)s,
-                    %(_update_date)s,
-                    True,
+                    {legacyValues}
+                    now(),
+                    now(),
                     %(department)s,
                     %(domain)s,
                     %(email)s,
                     %(external_id)s,
-                    '',
-                    '',
                     %(last_admin_check_status)s,
                     %(name)s,
                     %(namespace)s,
-                    '',
                     '',
                     %(surname)s,
                     %(user_id)s,
                     %(username)s
                 )
-            """,
+            """.format(
+                legacyNames="""
+                    active,
+                    group_ids,
+                    groups,
+                    role,
+                """ if self._legacy else '',
+                legacyValues="""
+                    True,
+                    '',
+                    '',
+                    ''
+                """ if self._legacy else '',
+            ),
             args=user,
         )
 
@@ -684,6 +693,12 @@ def parse_args():
         help='write log into file'
     )
     parser.add_argument(
+        '--legacy',
+        default=False,
+        action='store_true',
+        help='use legacy engine'
+    )
+    parser.add_argument(
         '--apply',
         default=False,
         action='store_true',
@@ -795,7 +810,7 @@ def convert(args, engineDir):
     )
 
     with statement:
-        aaadao = AAADAO(statement)
+        aaadao = AAADAO(statement, args.legacy)
         if aaadao.isDomainExists(args.authzName):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % args.domain
@@ -880,18 +895,20 @@ def convert(args, engineDir):
                 aaadao.insertUser(user)
 
                 permission = aaadao.fetchLegacyPermissions(user['user_id.old'])
-                permission['id'] = str(uuid.uuid4())
-                permission['ad_element_id'] = user['user_id']
-                permissions.append(permission)
+                if permission is not None:
+                    permission['id'] = str(uuid.uuid4())
+                    permission['ad_element_id'] = user['user_id']
+                    permissions.append(permission)
 
             logger.info('Adding new groups')
             for group in groups:
                 aaadao.insertGroup(group)
 
                 permission = aaadao.fetchLegacyPermissions(group['id.old'])
-                permission['id'] = str(uuid.uuid4())
-                permission['ad_element_id'] = group['id']
-                permissions.append(permission)
+                if permission is not None:
+                    permission['id'] = str(uuid.uuid4())
+                    permission['ad_element_id'] = group['id']
+                    permissions.append(permission)
 
             logger.info('Adding new permissions')
             for permission in permissions:
