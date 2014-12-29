@@ -141,9 +141,9 @@ class Statement(Base):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
-            self._connection.rollback()
-        else:
             self._connection.commit()
+        else:
+            self._connection.rollback()
         self._connection.close()
 
 
@@ -201,11 +201,12 @@ class VdcOptions(object):
         return ret
 
     def get_user_and_password_for_domain(self, domain):
+        user_name = self._get_option_for_domain(domain, 'AdUserName')
+        if user_name:
+            user_name = user_name.split('@')[0]
+
         return (
-            self._get_option_for_domain(
-                domain,
-                'AdUserName',
-            ).split('@')[0],
+            user_name,
             self._get_option_for_domain(domain, 'AdUserId'),
             self._get_option_for_domain(domain, 'AdUserPassword'),
         )
@@ -216,15 +217,30 @@ class AAADAO(object):
     def __init__(self, statement):
         self._statement = statement
 
+    def isDomainExists(self, new_profile):
+        users = self._statement.execute(
+            statement="""
+                select 1 from users where domain = %(new_profile)s
+            """,
+            args=dict(
+                new_profile=new_profile,
+            ),
+        )
+        groups = self._statement.execute(
+            statement="""
+                select 1 from ad_groups where domain = %(new_profile)s
+            """,
+            args=dict(
+                new_profile=new_profile,
+            ),
+        )
+
+        return any([groups, users])
+
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
             statement="""
-                select
-                    user_id,
-                    username,
-                    external_id,
-                    last_admin_check_status,
-                    active
+                select user_id, username, external_id, last_admin_check_status
                 from users
                 where domain = %(legacy_domain)s
             """,
@@ -309,7 +325,7 @@ class AAADAO(object):
                 ) values (
                     %(_create_date)s,
                     %(_update_date)s,
-                    %(active)s,
+                    True,
                     %(department)s,
                     %(domain)s,
                     %(email)s,
@@ -540,6 +556,7 @@ class AAAProfile(Base):
     def save(self):
         def _writelog(f, s):
             self.logger.debug("Write '%s'\n%s", f, s)
+            f.write(s)
 
         with open(
             '%s%s' % (self._files['authzFile'], self._TMP_SUFFIX),
@@ -778,8 +795,11 @@ def convert(args, engineDir):
     )
 
     with statement:
-        #@ALON: fail if we have anything in database for authzName
-        #before any change
+        aaadao = AAADAO(statement)
+        if aaadao.isDomainExists(args.authzName):
+            raise RuntimeError(
+                "User/Group from domain '%s' exists in database" % args.domain
+            )
 
         logger.info('Loading options')
         (
@@ -787,6 +807,11 @@ def convert(args, engineDir):
             user_id,
             password,
         ) = VdcOptions(statement).get_user_and_password_for_domain(args.domain)
+        if not all([user_name, user_id, password]):
+            raise RuntimeError(
+                "Domain '%s' does not exists. Exiting." % args.domain
+            )
+
         password = OptionDecrypt(prefix=args.prefix).decrypt(password)
 
         logger.info(
@@ -806,8 +831,6 @@ def convert(args, engineDir):
             domain=args.domain,
             prefix=args.prefix,
         ) as aaaprofile:
-            aaadao = AAADAO(statement)
-
             logger.info('Converting users')
             users = []
             for legacyUser in aaadao.fetchLegacyUsers(args.domain):
@@ -824,11 +847,10 @@ def convert(args, engineDir):
                     )
                 else:
                     e['user_id.old'] = legacyUser['user_id']
-                    e['domain'] = args.profile
+                    e['domain'] = args.authzName
                     e['last_admin_check_status'] = legacyUser[
                         'last_admin_check_status'
                     ]
-                    e['active'] = legacyUser['active']
                     users.append(e)
 
             logger.info('Converting groups')
@@ -847,7 +869,7 @@ def convert(args, engineDir):
                     )
                 else:
                     e['id.old'] = legacyGroup['id']
-                    e['domain'] = args.profile
+                    e['domain'] = args.authzName
                     groups.append(e)
 
             logger.info('Converting permissions')
