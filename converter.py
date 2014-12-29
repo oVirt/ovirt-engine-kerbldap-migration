@@ -354,7 +354,7 @@ class AAADAO(object):
                     True,
                     '',
                     '',
-                    ''
+                    '',
                 """ if self._legacy else '',
             ),
             args=user,
@@ -832,7 +832,7 @@ def setupLogger(log=None, debug=False):
         logger.addHandler(h)
 
         if log is not None:
-            h = logging.StreamHandler(stream=open(log, 'w'))
+            h = logging.StreamHandler(open(log, 'w'))
             h.setLevel(logging.DEBUG if debug else logging.INFO)
             h.setFormatter(
                 logging.Formatter(
