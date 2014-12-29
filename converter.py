@@ -383,6 +383,35 @@ class AAADAO(object):
         )
 
 
+class Kinit():
+
+    def __init__(self, username, password):
+        self._username = username
+        self._password = password
+
+    def login(self):
+        p = subprocess.Popen(
+            [
+                '-c',
+                """
+                KRB5_CONFIG=/etc/ovirt-engine/krb5.conf
+                echo {password} |
+                kinit {username}
+                """.format(
+                    username=self._username,
+                    password=self._password
+                )
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=True,
+        )
+        stdout, stderr = p.communicate()
+        if p.wait() != 0:
+            raise RuntimeError('Failed to execute kinit')
+
+
 class LDAP(Base):
 
     _username = None
@@ -414,6 +443,9 @@ class LDAP(Base):
 
     def connectGssapi(self, username, password, uri):
         # Note you need cyrus-sasl-gssapi package
+        kinit = Kinit(username, password)
+        kinit.login()
+
         self.logger.debug("Connect uri='%s' user='%s'", uri, username)
         self._conn = ldap.initialize('ldap://%s' % uri)
         auth = ldap.sasl.gssapi("")
