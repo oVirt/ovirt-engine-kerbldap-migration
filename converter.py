@@ -403,6 +403,12 @@ class Kinit():
             raise RuntimeError('Failed to execute kinit')
 
 
+Drivers = {
+    'ad': ADLDAP.__class__,
+    'ipa': IPALDAP.__class__,
+}
+
+
 class LDAP(Base):
 
     _username = None
@@ -645,18 +651,6 @@ class ADLDAP(LDAP):
             name=group.get('name', [''])[0],
             namespace=self.getNamespace(),
         )
-
-
-class LDAPDriver():
-
-    @staticmethod
-    def createDriver(domain, provider):
-        if provider == 'ad':
-            return ADLDAP(domain)
-        elif provider == 'ipa':
-            return IPALDAP(domain)
-        else:
-            raise RuntimeError("No such provider '%s'" % provider)
 
 
 class AAAProfile(Base):
@@ -1046,7 +1040,7 @@ def convert(args, engineDir):
             args.domain,
             user_name,
         )
-        driver = LDAPDriver.createDriver(args.domain, provider)
+        driver = Drivers[provider](args.domain)
         driver.connect(
             user_name,
             password,
