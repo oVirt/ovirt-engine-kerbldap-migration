@@ -274,7 +274,7 @@ class AAADAO(object):
     def fetchLegacyPermissions(self, legacy_id):
         ret = None
 
-        permission = self._statement.execute(
+        permissions = self._statement.execute(
             statement="""
                 select *
                 from permissions
@@ -284,8 +284,8 @@ class AAADAO(object):
                 legacy_id=legacy_id,
             ),
         )
-        if permission:
-            ret = permission[0]
+        if permissions:
+            ret = permissions
 
         return ret
 
@@ -969,26 +969,29 @@ def convert(args, engineDir):
 
             logger.info('Converting permissions')
             permissions = []
+            for user in users:
+                perms = aaadao.fetchLegacyPermissions(user['user_id.old'])
+                if perms is not None:
+                    for perm in perms:
+                        perms['id'] = str(uuid.uuid4())
+                        perms['ad_element_id'] = user['user_id']
+                        permissions.append(perm)
+
+            for group in groups:
+                perms = aaadao.fetchLegacyPermissions(group['id.old'])
+                if perms is not None:
+                    for perm in perms:
+                        perm['id'] = str(uuid.uuid4())
+                        perm['ad_element_id'] = group['id']
+                        permissions.append(perm)
 
             logger.info('Adding new users')
             for user in users:
                 aaadao.insertUser(user)
 
-                permission = aaadao.fetchLegacyPermissions(user['user_id.old'])
-                if permission is not None:
-                    permission['id'] = str(uuid.uuid4())
-                    permission['ad_element_id'] = user['user_id']
-                    permissions.append(permission)
-
             logger.info('Adding new groups')
             for group in groups:
                 aaadao.insertGroup(group)
-
-                permission = aaadao.fetchLegacyPermissions(group['id.old'])
-                if permission is not None:
-                    permission['id'] = str(uuid.uuid4())
-                    permission['ad_element_id'] = group['id']
-                    permissions.append(permission)
 
             logger.info('Adding new permissions')
             for permission in permissions:
