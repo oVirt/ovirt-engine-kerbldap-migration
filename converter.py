@@ -25,6 +25,7 @@ except ImportError:
 try:
     import ldap
     import ldap.filter
+    import ldap.sasl
 except ImportError:
     raise RuntimeError('Please install python-ldap')
 
@@ -206,15 +207,14 @@ class VdcOptions(object):
         return ret
 
     def get_user_and_password_for_domain(self, domain):
-        user_name = self._get_option_for_domain(domain, 'AdUserName')
-        if user_name:
-            user_name = user_name.split('@')[0]
-
         return (
-            user_name,
+            self._get_option_for_domain(domain, 'AdUserName'),
             self._get_option_for_domain(domain, 'AdUserId'),
             self._get_option_for_domain(domain, 'AdUserPassword'),
         )
+
+    def get_provider_type(self, domain):
+        return self._get_option_for_domain(domain, 'LDAPProviderTypes')
 
 
 class AAADAO(object):
@@ -395,6 +395,9 @@ class LDAP(Base):
         return self._domain
 
     def connect(self, username, password, uri, cacert=None):
+        self.connectSimple(username, password, uri, cacert)
+
+    def connectSimple(self, username, password, uri, cacert=None):
         self.logger.debug("Connect uri='%s' user='%s'", uri, username)
         self._conn = ldap.initialize('ldap://%s' % uri)
         if cacert is not None:
@@ -408,6 +411,13 @@ class LDAP(Base):
             self._conn.start_tls_s()
         self._conn.simple_bind_s(username, password)
         self._username = username
+
+    def connectGssapi(self, username, password, uri):
+        # Note you need cyrus-sasl-gssapi package
+        self.logger.debug("Connect uri='%s' user='%s'", uri, username)
+        self._conn = ldap.initialize('ldap://%s' % uri)
+        auth = ldap.sasl.gssapi("")
+        self._conn.sasl_interactive_bind_s("", auth)
 
     def search(self, baseDN, scope, filter, attributes):
         self.logger.debug(
@@ -430,8 +440,91 @@ class LDAP(Base):
     def getUser(self, entryId):
         pass
 
+    def getUserDN(self, entryId):
+        pass
+
     def getGroup(self, entryId):
         pass
+
+
+class IPALDAP(LDAP):
+
+    def __init__(self, domain):
+        super(IPALDAP, self).__init__(domain)
+
+    def connect(self, username, password, cacert):
+        super(IPALDAP, self).connectGssapi(
+            username,
+            password,
+            self.getDomain(),
+        )
+        self._conn.set_option(ldap.OPT_REFERRALS, 0)
+        self._namespace = self.search(
+            '',
+            ldap.SCOPE_BASE,
+            '(objectClass=*)',
+            ['defaultnamingcontext'],
+        )[0][1]['defaultnamingcontext'][0]
+
+    def _getEntryById(self, fields, entryId):
+        ret = None
+        result = self.search(
+            self._namespace,
+            ldap.SCOPE_SUBTREE,
+            '(ipaUniqueID=%s)' % entryId,
+            fields,
+        )
+        if result:
+            ret = result[0][1]
+            ret['dn'] = result[0][0]
+        return ret
+
+    def getNamespace(self):
+        return self._namespace
+
+    def getUser(self, entryId):
+        user = self._getEntryById(
+            fields=[
+                'displayName',
+                'givenName',
+                'mail',
+                'cn',
+                'ipaUniqueID',
+                'sn',
+                'dn',
+            ],
+            entryId=entryId,
+        )
+        return dict(
+            department='',  # TODO: is this in IPA entry?
+            email=user.get('mail', [''])[0],
+            external_id=base64.b64encode(user['ipaUniqueID'][0]),
+            name=user.get('cn', [''])[0],
+            namespace=self.getNamespace(),
+            surname=user.get('sn', [''])[0],
+            user_id=str(uuid.uuid4()),
+            username=user.get('dn', ['']),
+        )
+
+    def getUserDN(self, entryId):
+        return self.getUser(entryId)['username']
+
+    def getGroup(self, entryId):
+        group = self._getEntryById(
+            fields=[
+                'description',
+                'cn',
+                'ipaUniqueID',
+            ],
+            entryId=entryId,
+        )
+        return dict(
+            description=group.get('description', [''])[0],
+            external_id=base64.b64encode(group['ipaUniqueID'][0]),
+            id=str(uuid.uuid4()),
+            name=group.get('cn', [''])[0],
+            namespace=self.getNamespace(),
+        )
 
 
 class ADLDAP(LDAP):
@@ -442,7 +535,7 @@ class ADLDAP(LDAP):
     def connect(self, username, password, cacert):
         super(ADLDAP, self).connect(
             '%s@%s' % (
-                username,
+                username.split('@')[0],  # Get rid of realm
                 self.getDomain()
             ),
             password,
@@ -508,6 +601,9 @@ class ADLDAP(LDAP):
             username=user.get('userPrincipalName', [''])[0],
         )
 
+    def getUserDN(self, entryId):
+        return self.getUser(entryId)['username']
+
     def getGroup(self, entryId):
         group = self._getEntryById(
             fields=[
@@ -524,6 +620,18 @@ class ADLDAP(LDAP):
             name=group.get('name', [''])[0],
             namespace=self.getNamespace(),
         )
+
+
+class LDAPDriver():
+
+    @staticmethod
+    def createDriver(domain, provider):
+        if provider == 'activeDirectory':
+            return ADLDAP(domain)
+        elif provider == 'ipa':
+            return IPALDAP(domain)
+        else:
+            raise RuntimeError("No such provider '%s'" % provider)
 
 
 class AAAProfile(Base):
@@ -562,12 +670,6 @@ class AAAProfile(Base):
                 extensionsDir,
                 self._vars['configFile']
             ),
-            trustStore=os.path.join(
-                extensionsDir,
-                '..',
-                'aaa',
-                'ca.jks',
-            ),
             authzFile=os.path.join(
                 extensionsDir,
                 '%s.properties' % authzName
@@ -577,6 +679,13 @@ class AAAProfile(Base):
                 '%s.properties' % authnName
             ),
         )
+        if self._cacert is not None:
+            self._files['trustStore'] = os.path.join(
+                extensionsDir,
+                '..',
+                'aaa',
+                'ca.jks',
+            )
 
     def checkExisting(self):
         for f in self._files:
@@ -890,13 +999,14 @@ def convert(args, engineDir):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % args.domain
             )
-
+        vdcoptions = VdcOptions(statement)
         logger.info('Loading options')
         (
             user_name,
             user_id,
             password,
-        ) = VdcOptions(statement).get_user_and_password_for_domain(args.domain)
+        ) = vdcoptions.get_user_and_password_for_domain(args.domain)
+        provider = vdcoptions.get_provider_type(args.domain)
         if not all([user_name, user_id, password]):
             raise RuntimeError(
                 "Domain '%s' does not exists. Exiting." % args.domain
@@ -909,18 +1019,18 @@ def convert(args, engineDir):
             args.domain,
             user_name,
         )
-        driver = ADLDAP(args.domain)
+        driver = LDAPDriver.createDriver(args.domain, provider)
         driver.connect(
             user_name,
             password,
-            cacert=args.cacert,
+            cacert=args.cacert
         )
 
         with AAAProfile(
             profile=args.profile,
             authnName=args.authnName,
             authzName=args.authzName,
-            user=driver.getUserName(),
+            user=driver.getUserDN(user_id),
             password=password,
             domain=args.domain,
             cacert=args.cacert,
@@ -973,8 +1083,8 @@ def convert(args, engineDir):
                 perms = aaadao.fetchLegacyPermissions(user['user_id.old'])
                 if perms is not None:
                     for perm in perms:
-                        perms['id'] = str(uuid.uuid4())
-                        perms['ad_element_id'] = user['user_id']
+                        perm['id'] = str(uuid.uuid4())
+                        perm['ad_element_id'] = user['user_id']
                         permissions.append(perm)
 
             for group in groups:
