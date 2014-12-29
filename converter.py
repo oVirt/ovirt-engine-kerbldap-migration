@@ -206,19 +206,17 @@ class VdcOptions(object):
 
         return ret
 
-    def get_user_and_password_for_domain(self, domain):
-        return (
-            self._get_option_for_domain(domain, 'AdUserName'),
-            self._get_option_for_domain(domain, 'AdUserId'),
-            self._get_option_for_domain(domain, 'AdUserPassword'),
-        )
-
-    def get_provider_type(self, domain):
+    def get_user_attributes_for_domain(self, domain):
         provider = self._get_option_for_domain(domain, 'LDAPProviderTypes')
         if provider == 'activeDirectory':
             provider = 'ad'
 
-        return provider.lower()
+        return (
+            self._get_option_for_domain(domain, 'AdUserName'),
+            self._get_option_for_domain(domain, 'AdUserId'),
+            self._get_option_for_domain(domain, 'AdUserPassword'),
+            provider.lower()
+        )
 
 
 class AAADAO(object):
@@ -691,6 +689,12 @@ class AAAProfile(Base):
                 extensionsDir,
                 self._vars['configFile']
             ),
+            trustStore=os.path.join(
+                extensionsDir,
+                '..',
+                'aaa',
+                'ca.jks',
+            ),
             authzFile=os.path.join(
                 extensionsDir,
                 '%s.properties' % authzName
@@ -700,13 +704,6 @@ class AAAProfile(Base):
                 '%s.properties' % authnName
             ),
         )
-        if self._cacert is not None:
-            self._files['trustStore'] = os.path.join(
-                extensionsDir,
-                '..',
-                'aaa',
-                'ca.jks',
-            )
 
     def checkExisting(self):
         for f in self._files:
@@ -849,7 +846,9 @@ class AAAProfile(Base):
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
             for f in self._files.values():
-                os.rename('%s%s' % (f, self._TMP_SUFFIX), f)
+                tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
+                if os.path.exists(tmp_file):
+                    os.rename(tmp_file, f)
         else:
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
@@ -1026,8 +1025,8 @@ def convert(args, engineDir):
             user_name,
             user_id,
             password,
-        ) = vdcoptions.get_user_and_password_for_domain(args.domain)
-        provider = vdcoptions.get_provider_type(args.domain)
+            provider,
+        ) = vdcoptions.get_user_attributes_for_domain(args.domain)
         if not all([user_name, user_id, password]):
             raise RuntimeError(
                 "Domain '%s' does not exists. Exiting." % args.domain
