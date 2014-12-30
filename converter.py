@@ -221,9 +221,15 @@ class VdcOptions(object):
 
 class AAADAO(object):
 
-    def __init__(self, statement, legacy):
+    _legacyAttrs = {
+        'active': 'True',
+        'group_ids': "''",
+        'groups': "''",
+        'role': "''",
+    }
+
+    def __init__(self, statement):
         self._statement = statement
-        self._legacy = legacy
 
     def isDomainExists(self, new_profile):
         users = self._statement.execute(
@@ -277,6 +283,25 @@ class AAADAO(object):
         return self._statement.execute(
             statement="""select * from permissions""",
         )
+
+    def fetchLegacyAttributes(self):
+        for attr in self._legacyAttrs.keys():
+            exist = bool(self._statement.execute(
+                statement="""
+                    select 1
+                    from pg_class, pg_attribute
+                    where
+                        pg_attribute.attrelid = pg_class.oid and
+                        pg_class.relname = %(table)s and
+                        pg_attribute.attname = %(field)s
+                """,
+                args=dict(
+                    table='users',
+                    field=attr,
+                )
+            ))
+            if not exist:
+                del self._legacyAttrs[attr]
 
     def insertPermission(self, permission):
         self._statement.execute(
@@ -333,18 +358,14 @@ class AAADAO(object):
                     %(username)s
                 )
             """.format(
-                legacyNames="""
-                    active,
-                    group_ids,
-                    groups,
-                    role,
-                """ if self._legacy else '',
-                legacyValues="""
-                    True,
-                    '',
-                    '',
-                    '',
-                """ if self._legacy else '',
+                legacyNames='%s%s' % (
+                    ','.join(self._legacyAttrs.keys()),
+                    '' if not self._legacyAttrs.keys() else ','
+                ),
+                legacyValues='%s%s' % (
+                    ','.join(self._legacyAttrs.values()),
+                    '' if not self._legacyAttrs.values() else ','
+                )
             ),
             args=user,
         )
@@ -872,12 +893,6 @@ def parse_args():
         help='write log into file'
     )
     parser.add_argument(
-        '--legacy',
-        default=False,
-        action='store_true',
-        help='use legacy engine'
-    )
-    parser.add_argument(
         '--cacert',
         metavar='FILE',
         required=True,
@@ -1001,10 +1016,13 @@ def convert(args, engineDir):
     )
 
     with statement:
-        aaadao = AAADAO(statement, args.legacy)
+        aaadao = AAADAO(statement)
+        aaadao.fetchLegacyAttributes()
         if aaadao.isDomainExists(args.authzName):
             raise RuntimeError(
-                "User/Group from domain '%s' exists in database" % args.domain
+                "User/Group from domain '%s' exists in database" % (
+                    args.authzName
+                )
             )
         vdcoptions = VdcOptions(statement)
         logger.info('Loading options')
