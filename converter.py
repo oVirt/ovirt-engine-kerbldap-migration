@@ -878,19 +878,19 @@ def parse_args():
     parser.add_argument(
         '--prefix',
         default='/',
-        help='for testing withing dev env'
+        help='for testing withing dev env',
     )
     parser.add_argument(
         '--debug',
         default=False,
         action='store_true',
-        help='enable debug log'
+        help='enable debug log',
     )
     parser.add_argument(
         '--log',
         metavar='FILE',
         default=None,
-        help='write log into file'
+        help='write log into file',
     )
     parser.add_argument(
         '--cacert',
@@ -911,22 +911,22 @@ def parse_args():
         '--domain',
         dest='domain',
         required=True,
-        help='domain name to convert'
+        help='domain name to convert',
     )
     parser.add_argument(
         '--authn-name',
         dest='authnName',
-        help='authn extension name, default profile name with -authn suffix'
+        help='authn extension name, default profile name with -authn suffix',
     )
     parser.add_argument(
         '--authz-name',
         dest='authzName',
-        help='authz extension name, default profile name with -authz suffix'
+        help='authz extension name, default profile name with -authz suffix',
     )
     parser.add_argument(
         '--profile',
         dest='profile',
-        help='new profile name, default old profile name with -new suffix'
+        help='new profile name, default old profile name with -new suffix',
     )
     args = parser.parse_args(sys.argv[1:])
     if not args.authnName:
@@ -1159,7 +1159,7 @@ def main():
                     'usr',
                     'lib*',
                     'python*',
-                    'site-packages'
+                    'site-packages',
                 )
             )[0]
         )
