@@ -1087,12 +1087,13 @@ def convert(args, engineDir):
                         legacyUser['username'],
                     )
                 else:
-                    e['user_id.old'] = legacyUser['user_id']
-                    e['domain'] = args.authzName
-                    e['last_admin_check_status'] = legacyUser[
-                        'last_admin_check_status'
-                    ]
-                    users[e['user_id.old']] = e
+                    e.update({
+                        'domain': args.authzName,
+                        'last_admin_check_status': legacyUser[
+                            'last_admin_check_status'
+                        ],
+                    })
+                    users[legacyUser['user_id']] = e
 
             logger.info('Converting groups')
             groups = {}
@@ -1109,9 +1110,23 @@ def convert(args, engineDir):
                         legacyGroup['name'],
                     )
                 else:
-                    e['id.old'] = legacyGroup['id']
                     e['domain'] = args.authzName
-                    groups[e['id.old']] = e
+                    groups[legacyGroup['id']] = e
+
+            logger.info('Converting permissions')
+            permissions = []
+            for perm in aaadao.fetchAllPermissions():
+                group = groups.get(perm['ad_element_id'])
+                if group is not None:
+                    perm['id'] = str(uuid.uuid4())
+                    perm['ad_element_id'] = group['id']
+                    permissions.append(perm)
+                else:
+                    user = users.get(perm['ad_element_id'])
+                    if user is not None:
+                        perm['id'] = str(uuid.uuid4())
+                        perm['ad_element_id'] = user['user_id']
+                        permissions.append(perm)
 
             logger.info('Adding new users')
             for user in users.values():
@@ -1120,20 +1135,6 @@ def convert(args, engineDir):
             logger.info('Adding new groups')
             for group in groups.values():
                 aaadao.insertGroup(group)
-
-            logger.info('Converting permissions')
-            permissions = []
-            for perm in aaadao.fetchAllPermissions():
-                if perm['ad_element_id'] in groups.keys():
-                    perm['id'] = str(uuid.uuid4())
-                    perm['ad_element_id'] = groups[perm['ad_element_id']]['id']
-                    permissions.append(perm)
-                elif perm['ad_element_id'] in users.keys():
-                    perm['id'] = str(uuid.uuid4())
-                    perm['ad_element_id'] = users[
-                        perm['ad_element_id']
-                    ]['user_id']
-                    permissions.append(perm)
 
             logger.info('Adding new permissions')
             for permission in permissions:
