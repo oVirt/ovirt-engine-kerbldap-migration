@@ -185,17 +185,17 @@ class VdcOptions(object):
     def __init__(self, statement):
         self._statement = statement
 
-    def _get_option_for_domain(self, domain, val):
+    def _getOptionForDomain(self, domain, name):
         ret = None
 
         result = self._statement.execute(
             statement="""
                 select option_value
                 from vdc_options
-                where option_name = %(val)s
+                where option_name = %(name)s
             """,
             args=dict(
-                val=val,
+                name=name,
             ),
         )
         if result:
@@ -207,16 +207,16 @@ class VdcOptions(object):
 
         return ret
 
-    def get_user_attributes_for_domain(self, domain):
-        provider = self._get_option_for_domain(domain, 'LDAPProviderTypes')
+    def getDomainEntry(self, domain):
+        provider = self._getOptionForDomain(domain, 'LDAPProviderTypes')
         if provider == 'activeDirectory':
             provider = 'ad'
 
-        return (
-            self._get_option_for_domain(domain, 'AdUserName'),
-            self._get_option_for_domain(domain, 'AdUserId'),
-            self._get_option_for_domain(domain, 'AdUserPassword'),
-            provider.lower() if provider else None
+        return dict(
+            user=self._getOptionForDomain(domain, 'AdUserName'),
+            userid=self._getOptionForDomain(domain, 'AdUserId'),
+            password=self._getOptionForDomain(domain, 'AdUserPassword'),
+            provider=provider.lower() if provider else None
         )
 
 
@@ -1026,31 +1026,38 @@ def convert(args, engineDir):
                     args.authzName
                 )
             )
-        vdcoptions = VdcOptions(statement)
         logger.info('Loading options')
-        (
-            user_name,
-            user_id,
-            password,
-            provider,
-        ) = vdcoptions.get_user_attributes_for_domain(args.domain)
-        if not all([user_name, user_id, password]):
+        domainEntry = VdcOptions(statement).getDomainEntry(args.domain)
+        if not all([domainEntry.values()]):
             raise RuntimeError(
                 "Domain '%s' does not exists. Exiting." % args.domain
             )
 
-        password = OptionDecrypt(prefix=args.prefix).decrypt(password)
+        domainEntry['password'] = OptionDecrypt(prefix=args.prefix).decrypt(
+            domainEntry['password'],
+        )
+
+        driver = Drivers.get(domainEntry['provider'])
+        if driver is None:
+            raise RuntimeError(
+                "Provider '%s' is not supported" % domainEntry['provider']
+            )
+
+        driver = driver(args.domain)
 
         logger.info(
             "Connecting to ldap '%s' using '%s'",
             args.domain,
-            user_name,
+            domainEntry['user'],
         )
-        driver = Drivers[provider](args.domain)
-        userDN = driver.fetchUserDN(user_id, user_name, password, args.cacert)
         driver.connect(
-            userDN,
-            password,
+            driver.fetchUserDN(
+                domainEntry['userid'],
+                domainEntry['user'],
+                domainEntry['password'],
+                args.cacert,
+            ),
+            domainEntry['password'],
             cacert=args.cacert
         )
 
@@ -1059,8 +1066,8 @@ def convert(args, engineDir):
             authnName=args.authnName,
             authzName=args.authzName,
             user=driver.getUserDN(),
-            provider=provider,
-            password=password,
+            password=domainEntry['password'],
+            provider=domainEntry['provider'],
             domain=args.domain,
             cacert=args.cacert,
             prefix=args.prefix,
