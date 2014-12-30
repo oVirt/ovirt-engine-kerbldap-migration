@@ -229,8 +229,27 @@ class AAADAO(object):
         'role': "''",
     }
 
+    def _fetchLegacyAttributes(self):
+        for attr in self._legacyAttrs.keys():
+            if not self._statement.execute(
+                statement="""
+                    select 1
+                    from pg_class, pg_attribute
+                    where
+                        pg_attribute.attrelid = pg_class.oid and
+                        pg_class.relname = %(table)s and
+                        pg_attribute.attname = %(field)s
+                """,
+                args=dict(
+                    table='users',
+                    field=attr,
+                )
+            ):
+                del self._legacyAttrs[attr]
+
     def __init__(self, statement):
         self._statement = statement
+        self._fetchLegacyAttributes()
 
     def isDomainExists(self, new_profile):
         users = self._statement.execute(
@@ -284,25 +303,6 @@ class AAADAO(object):
         return self._statement.execute(
             statement="""select * from permissions""",
         )
-
-    def fetchLegacyAttributes(self):
-        for attr in self._legacyAttrs.keys():
-            exist = bool(self._statement.execute(
-                statement="""
-                    select 1
-                    from pg_class, pg_attribute
-                    where
-                        pg_attribute.attrelid = pg_class.oid and
-                        pg_class.relname = %(table)s and
-                        pg_attribute.attname = %(field)s
-                """,
-                args=dict(
-                    table='users',
-                    field=attr,
-                )
-            ))
-            if not exist:
-                del self._legacyAttrs[attr]
 
     def insertPermission(self, permission):
         self._statement.execute(
@@ -1020,7 +1020,6 @@ def convert(args, engineDir):
 
     with statement:
         aaadao = AAADAO(statement)
-        aaadao.fetchLegacyAttributes()
         if aaadao.isDomainExists(args.authzName):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % (
