@@ -424,14 +424,21 @@ class LDAP(Base):
         super(LDAP, self).__init__()
         self._domain = domain
 
-    def fetchUserDN(self, entryId, username, password):
-        # Note you need cyrus-sasl-gssapi package
-        kinit = Kinit(username, password)
-        kinit.login()
+    def fetchUserDN(self, entryId, username, password, cacert=None):
+        if isinstance(self, ADLDAP):
+            self.connect(
+                '%s@%s' % (username.split('@')[0], self._domain),
+                password,
+                cacert
+            )
+        else:
+            # Note you need cyrus-sasl-gssapi package
+            kinit = Kinit(username, password)
+            kinit.login()
 
-        self._conn = ldap.initialize('ldap://%s' % self._domain)
-        auth = ldap.sasl.gssapi("")
-        self._conn.sasl_interactive_bind_s("", auth)
+            self._conn = ldap.initialize('ldap://%s' % self._domain)
+            auth = ldap.sasl.gssapi("")
+            self._conn.sasl_interactive_bind_s("", auth)
         self.fetchNamespace()
         self._userDN = self.getUser(entryId)['dn']
         self._conn.unbind_s()
@@ -520,7 +527,7 @@ class LDAP(Base):
         group = self._getEntryById(
             fields=[
                 self.attrGroupMap['description'],
-                self.attrGroupMap['cn'],
+                self.attrGroupMap['name'],
                 self.attrGroupMap['groupID'],
             ],
             entryId=entryId,
@@ -614,12 +621,12 @@ class ADLDAP(LDAP):
 
     def getUser(self, entryId):
         user = super(ADLDAP, self).getUser(entryId)
-        user['principalID'] = base64.b64encode(user['principalID'])
+        user['external_id'] = base64.b64encode(user['external_id'])
         return user
 
     def getGroup(self, entryId):
         group = super(ADLDAP, self).getGroup(entryId)
-        group['groupID'] = base64.b64encode(group['groupID'])
+        group['external_id'] = base64.b64encode(group['external_id'])
         return group
 
 
@@ -1020,7 +1027,7 @@ def convert(args, engineDir):
             user_name,
         )
         driver = Drivers[provider](args.domain)
-        userDN = driver.fetchUserDN(user_id, user_name, password)
+        userDN = driver.fetchUserDN(user_id, user_name, password, args.cacert)
         driver.connect(
             userDN,
             password,
@@ -1092,7 +1099,7 @@ def convert(args, engineDir):
             for perm in aaadao.fetchAllPermissions():
                 if perm['ad_element_id'] in groups.keys():
                     perm['id'] = str(uuid.uuid4())
-                    perm['ad_element_id'] = group[perm['ad_element_id']]['id']
+                    perm['ad_element_id'] = groups[perm['ad_element_id']]['id']
                     permissions.append(perm)
                 elif perm['ad_element_id'] in users.keys():
                     perm['id'] = str(uuid.uuid4())
