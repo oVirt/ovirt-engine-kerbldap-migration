@@ -215,7 +215,6 @@ class VdcOptions(object):
 
         return dict(
             user=self._getOptionForDomain(domain, 'AdUserName'),
-            userid=self._getOptionForDomain(domain, 'AdUserId'),
             password=self._getOptionForDomain(domain, 'AdUserPassword'),
             provider=provider.lower() if provider else None
         )
@@ -452,99 +451,76 @@ class Kerberos(Base):
 
 class LDAP(Base):
 
-    _userDN = None
-
-    attrUserMap = {
-        'displayName': 'displayName',
-        'firstName': 'givenName',
-        'lastName': 'sn',
-        'mail': 'mail',
-        'dn': 'dn',
-        'department': 'department',
-        'name': 'cn',
-    }
-
-    attrGroupMap = {
-        'description': 'description',
-        'name': 'cn',
-    }
+    _attrUserMap = None
+    _attrGroupMap = None
+    _bindUser = None
+    _bindPassword = None
+    _bindSSL = False
 
     def __init__(self, kerberos, domain):
         super(LDAP, self).__init__()
         self._kerberos = kerberos
         self._domain = domain
 
-    def fetchUserDN(self, entryId, username, password, cacert=None):
-        try:
-            if isinstance(self, ADLDAP):
-                self.connect(
-                    '%s@%s' % (username.split('@')[0], self._domain),
-                    password,
-                    cacert
-                )
-            else:
-                # Note you need cyrus-sasl-gssapi package
-                self._kerberos.kinit(username, password)
-                self._conn = ldap.initialize('ldap://%s' % self._domain)
-                self._conn.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
-                self._conn.set_option(ldap.OPT_REFERRALS, 0)
-                self._conn.sasl_interactive_bind_s(
-                    '',
-                    ldap.sasl.sasl(
-                        {},
-                        'GSSAPI',
-                    ),
-                )
-            self.fetchNamespace()
-            self._userDN = self.getUser(entryId)['dn']
-            self._conn.unbind_s()
-        finally:
-            if not isinstance(self, ADLDAP):
-                self._kerberos.kdestroy()
+    def _determineNamespace(self, connection=None):
+        return None
 
-        self.logger.debug('UserDN: %s', self._userDN)
-        return self._userDN
+    def _determineBindUser(self, username, password):
+        return username
 
-    def getDomain(self):
-        return self._domain
+    def _decodeLegacyEntryId(self, id):
+        return id
 
-    def fetchNamespace(self):
-        self._namespace = self.search(
-            '',
-            ldap.SCOPE_BASE,
-            '(objectClass=*)',
-            ['defaultnamingcontext'],
-        )[0][1]['defaultnamingcontext'][0]
+    def _encodeLdapId(self, id):
+        return id
 
-    def _getEntryById(self, fields, entryId):
+    def _getEntryById(self, attrs, entryId):
         ret = None
         result = self.search(
             self._namespace,
             ldap.SCOPE_SUBTREE,
-            '(%s=%s)' % (self.attrUserMap['principalID'], entryId),
-            fields,
+            '(%s=%s)' % (
+                attrs['entryId'],
+                self._decodeLegacyEntryId(entryId),
+            ),
+            attrs.values(),
         )
         if result:
-            ret = result[0][1]
-            ret['principalDN'] = result[0][0]
+            entry = result[0][1]
+            ret = {}
+            ret['__dn'] = result[0][0]
+            for k, v in attrs.items():
+                ret[k] = entry.get(v, [''])[0]
+            ret['entryId'] = self._encodeLdapId(ret['entryId'])
         return ret
 
+    def getDomain(self):
+        return self._domain
+
     def connect(self, username, password, cacert=None):
-        self.logger.debug("Connect uri='%s' user='%s'", self._domain, username)
-        self._conn = ldap.initialize('ldap://%s' % self._domain)
+        self.logger.debug(
+            "Connect uri='%s' user='%s'",
+            self._domain,
+            username,
+        )
+        self._bindUser = self._determineBindUser(username, password)
+        self._bindPassword = password
+        self._bindSSL = cacert is not None
+        self._connection = ldap.initialize('ldap://%s' % self._domain)
+        self._connection.set_option(ldap.OPT_REFERRALS, 0)
+        self._connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
         if cacert is not None:
-            self._conn.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
-            self._conn.set_option(
+            self._connection.set_option(
                 ldap.OPT_X_TLS_REQUIRE_CERT,
                 ldap.OPT_X_TLS_DEMAND
             )
             # does not work per connection?
             ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, cacert)
-            self._conn.start_tls_s()
-        self._conn.simple_bind_s(username, password)
-        self._conn.set_option(ldap.OPT_REFERRALS, 0)
+            self._connection.start_tls_s()
+        self._connection.simple_bind_s(self._bindUser, password)
+        self._namespace = self._determineNamespace()
 
-    def search(self, baseDN, scope, filter, attributes):
+    def search(self, baseDN, scope, filter, attributes, connection=None):
         self.logger.debug(
             "Search baseDN='%s', scope=%s, filter='%s', attributes=%s'",
             baseDN,
@@ -552,7 +528,9 @@ class LDAP(Base):
             filter,
             attributes,
         )
-        ret = self._conn.search_s(baseDN, scope, filter, attributes)
+        if connection is None:
+            connection = self._connection
+        ret = connection.search_s(baseDN, scope, filter, attributes)
         self.logger.debug('SearchResult: %s', ret)
         return ret
 
@@ -561,142 +539,238 @@ class LDAP(Base):
 
     def getUser(self, entryId):
         user = self._getEntryById(
-            fields=[
-                self.attrUserMap['displayName'],
-                self.attrUserMap['firstName'],
-                self.attrUserMap['mail'],
-                self.attrUserMap['principalID'],
-                self.attrUserMap['lastName'],
-                self.attrUserMap['dn'],
-                self.attrUserMap['name'],
-            ],
+            attrs=self._attrUserMap,
             entryId=entryId,
         )
-        return dict(
-            department=user.get(self.attrUserMap['department'], [''])[0],
-            email=user.get(self.attrUserMap['mail'], [''])[0],
-            external_id=user.get(self.attrUserMap['principalID'], [''])[0],
-            name=user.get(self.attrUserMap['firstName'], [''])[0],
-            namespace=self.getNamespace(),
-            surname=user.get(self.attrUserMap['lastName'], [''])[0],
-            user_id=str(uuid.uuid4()),
-            username=user.get(self.attrUserMap['name'], [''])[0],
-            dn=user.get('principalDN', ['']),
-        )
+        user['user_id'] = str(uuid.uuid4())
+        user['external_id'] = user['entryId']
+        user['namespace'] = self.getNamespace()
+        return user
 
     def getGroup(self, entryId):
         group = self._getEntryById(
-            fields=[
-                self.attrGroupMap['description'],
-                self.attrGroupMap['name'],
-                self.attrGroupMap['groupID'],
-            ],
+            attrs=self._attrGroupMap,
             entryId=entryId,
         )
-        return dict(
-            description=group.get(self.attrGroupMap['description'], [''])[0],
-            external_id=group.get(self.attrGroupMap['groupID'], [''])[0],
-            id=str(uuid.uuid4()),
-            name=group.get(self.attrGroupMap['name'], [''])[0],
-            namespace=self.getNamespace(),
-        )
+        group['id'] = str(uuid.uuid4())
+        group['external_id'] = group['entryId']
+        group['namespace'] = self.getNamespace()
+        return group
 
     def getUserDN(self):
-        return self._userDN
+        return self._bindUser
 
 
-class RHDSLDAP(LDAP):
+class SimpleLDAP(LDAP):
 
-    def __init__(self, kerberos, domain):
-        super(RHDSLDAP, self).__init__(kerberos, domain)
-        self.attrUserMap['principalID'] = 'nsuniqueid'
-        self.attrGroupMap['groupID'] = 'nsuniqueid'
+    _simpleNamespaceAttribute = 'defaultNamingContext'
+    _simpleProvider = None
 
-    def __convert_to_rhds_nsuniqueid(self, entryId):
-        s = '%s%s' % (entryId[:23], entryId[(24):])
-        s = '%s%s' % (s[:13], s[(14):])
-        s = '%s-%s' % (s[:26], s[26:])
-        return s
-
-    def _getEntryById(self, fields, entryId):
-        return super(RHDSLDAP, self)._getEntryById(
-            fields,
-            self.__convert_to_rhds_nsuniqueid(entryId)
-        )
-
-
-class OpenLDAP(LDAP):
-
-    def __init__(self, kerberos, domain):
-        super(OpenLDAP, self).__init__(kerberos, domain)
-        self.attrUserMap['principalID'] = 'entryUUID'
-        self.attrGroupMap['groupID'] = 'entryUUID'
-
-    def fetchNamespace(self):
-        self._namespace = self.search(
+    def _determineNamespace(self, connection=None):
+        return self.search(
             '',
             ldap.SCOPE_BASE,
             '(objectClass=*)',
-            ['namingContexts'],
-        )[0][1]['namingContexts'][0]
+            [self._simpleNamespaceAttribute],
+            connection=connection,
+        )[0][1]['defaultnamingcontext'][0]
+
+    def _determineBindUser(self, username, password):
+        try:
+            # Note you need cyrus-sasl-gssapi package
+            self._kerberos.kinit(username, password)
+            connection = ldap.initialize('ldap://%s' % self._domain)
+            connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
+            connection.set_option(ldap.OPT_REFERRALS, 0)
+            connection.sasl_interactive_bind_s(
+                '',
+                ldap.sasl.sasl(
+                    {},
+                    'GSSAPI',
+                ),
+            )
+            #@ALON: TODO: fetch by user name
+            #@ALON: TODO: search directly as we need to use
+            #this connection.
+            user = self.getUser('TODO')['__dn']
+            connection.unbind_s()
+            return user
+        finally:
+            self._kerberos.kdestroy()
+
+    def getConfig(self):
+        return (
+            "include = <{provider}.properties>\n"
+            "\n"
+            "self._vars.server = {server}\n"
+            "self._vars.user = {user}\n"
+            "self._vars.password = {password}\n"
+            "\n"
+            "pool.default.serverset.single.server = ${{global:vars.server}}\n"
+            "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
+            "pool.default.auth.simple.password = ${{global:vars.password}}\n"
+            "\n"
+            "pool.default.ssl.startTLS = {startTLS}\n"
+            "pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n"
+            "pool.default.ssl.truststore.password = changeit"
+        ).format(
+            provider=self._simpleProvider,
+            user=self._bindUser,
+            password=self._bindPassword,
+            server=self._server,    # TODO: figure it out
+            startTLS='true' if self._bindSSL else 'false',
+        )
 
 
-class IPALDAP(LDAP):
+class RHDSLDAP(SimpleLDAP):
 
-    def __init__(self, kerberos, domain):
-        super(IPALDAP, self).__init__(kerberos, domain)
-        self.attrUserMap['principalID'] = 'ipaUniqueID'
-        self.attrGroupMap['groupID'] = 'ipaUniqueID'
+    _simpleProvider = 'rhds'
+
+    _attrUserMap = {
+        'entryId': 'nsUniqueId',
+        'name': 'givenName',
+        'surname': 'sn',
+        'email': 'mail',
+        'department': 'department',
+        'username': 'cn',
+    }
+
+    _attrGroupMap = {
+        'entryId': 'nsuniqueid',
+        'description': 'description',
+        'name': 'cn',
+    }
+
+    def __init__(self, *args, **kwargs):
+        super(RHDSLDAP, self).__init__(*args, **kwargs)
+
+    def _decodeLegacyEntryId(self, id):
+        #@ALON: please simplify I cannot understand what it does
+        #@ALON: a simple return "%s%s%s%s" % (id[], id[])
+        s = '%s%s' % (id[:23], id[24:])
+        s = '%s%s' % (s[:13], s[14:])
+        s = '%s-%s' % (s[:26], s[26:])
+        return s
+
+
+class OpenLDAP(SimpleLDAP):
+
+    _simpleProvider = 'openldap'
+
+    _attrUserMap = {
+        'entryId': 'entryUUID',
+        'name': 'givenName',
+        'surname': 'sn',
+        'email': 'mail',
+        'department': 'department',
+        'username': 'cn',
+    }
+
+    _attrGroupMap = {
+        'entryId': 'entryUUID',
+        'description': 'description',
+        'name': 'cn',
+    }
+
+    _simpleNamespaceAttribute = 'namingContexts'
+
+    def __init__(self, *args, **kwargs):
+        super(OpenLDAP, self).__init__(*args, **kwargs)
+
+
+class IPALDAP(SimpleLDAP):
+
+    _simpleProvider = 'ipa'
+
+    _attrUserMap = {
+        'entryId': 'ipaUniqueID',
+        'name': 'givenName',
+        'surname': 'sn',
+        'email': 'mail',
+        'department': 'department',
+        'username': 'cn',
+    }
+
+    _attrGroupMap = {
+        'entryId': 'ipaUniqueID',
+        'description': 'description',
+        'name': 'cn',
+    }
+
+    def __init__(self, *args, **kwargs):
+        super(IPALDAP, self).__init__(*args, **kwargs)
 
 
 class ADLDAP(LDAP):
 
-    def __init__(self, kerberos, domain):
-        super(ADLDAP, self).__init__(kerberos, domain)
-        self.attrUserMap['principalID'] = 'objectGUID'
-        self.attrUserMap['name'] = 'name'
-        self.attrGroupMap['groupID'] = 'objectGUID'
-        self.attrGroupMap['name'] = 'name'
+    _attrUserMap = {
+        'entryId': 'objectGUID',
+        'name': 'givenName',
+        'surname': 'sn',
+        'email': 'mail',
+        'department': 'department',
+        'username': 'name',
+    }
 
-    def fetchNamespace(self):
+    _attrGroupMap = {
+        'entryId': 'objectGUID',
+        'description': 'description',
+        'name': 'name',
+    }
+
+    def _determineBindUser(self, username, password, cacert=None):
+        return '%s@%s' % (username.split('@', 1)[0], self._domain)
+
+    def _determineNamespace(self, connection=None):
         _configurationNamingContext = self.search(
             '',
             ldap.SCOPE_BASE,
             '(objectclass=*)',
-            ['configurationNamingContext']
+            ['configurationNamingContext'],
+            connection=connection,
         )[0][1]['configurationNamingContext'][0]
-        self._namespace = self.search(
+        return self.search(
             'CN=Partitions,%s' % _configurationNamingContext,
             ldap.SCOPE_SUBTREE,
             '(&(objectClass=crossRef)(dnsRoot=%s)(nETBIOSName=*))' % (
                 self.getDomain(),
             ),
             ['nCName'],
+            connection=connection,
         )[0][1]['nCName'][0]
 
-    def _getEntryById(self, fields, entryId):
-        return super(ADLDAP, self)._getEntryById(
-            fields,
-            ldap.filter.escape_filter_chars(uuid.UUID(entryId).bytes_le)
+    def __init__(self, *args, **kwargs):
+        super(ADLDAP, self).__init__(*args, **kwargs)
+
+    def _decodeLegacyEntryId(self, id):
+        return ldap.filter.escape_filter_chars(uuid.UUID(id).bytes_le)
+
+    def _encodeLdapId(self, id):
+        return base64.b64encode(id)
+
+    def getConfig(self):
+        return (
+            "include = <ad.properties>\n"
+            "\n"
+            "self._vars.domain = {domain}\n"
+            "self._vars.user = {user}\n"
+            "self._vars.password = {password}\n"
+            "\n"
+            "pool.default.serverset.type = srvrecord\n"
+            "pool.default.serverset.srvrecord.domain = "
+            "${{global:vars.domain}}\n"
+            "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
+            "pool.default.auth.simple.password = ${{global:vars.password}}\n"
+            "\n"
+            "pool.default.ssl.startTLS = {startTLS}\n"
+            "pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n"
+            "pool.default.ssl.truststore.password = changeit"
+        ).format(
+            user=self._bindUser,
+            password=self._bindPassword,
+            domain=self._domain,
+            startTLS='true' if self._bindSSL else 'false',
         )
-
-    def getUser(self, entryId):
-        user = super(ADLDAP, self).getUser(entryId)
-        user['external_id'] = base64.b64encode(user['external_id'])
-        return user
-
-    def getGroup(self, entryId):
-        group = super(ADLDAP, self).getGroup(entryId)
-        group['external_id'] = base64.b64encode(group['external_id'])
-        return group
-
-
-Drivers = {
-    'ad': ADLDAP,
-    'ipa': IPALDAP,
-    'rhds': RHDSLDAP,
-    'openldap': OpenLDAP,
-}
 
 
 class AAAProfile(Base):
@@ -708,10 +782,7 @@ class AAAProfile(Base):
         profile,
         authnName,
         authzName,
-        user,
-        provider,
-        password,
-        domain,
+        driver,
         cacert=None,
         prefix='/',
     ):
@@ -721,11 +792,8 @@ class AAAProfile(Base):
             prefix,
             'etc/ovirt-engine/extensions.d',
         )
-        self._user = user
-        self._password = password
-        self._domain = domain
+        self._driver = driver
         self._cacert = cacert
-        self._provider = provider
         self._vars = dict(
             authnName=authnName,
             authzName=authzName,
@@ -850,42 +918,7 @@ class AAAProfile(Base):
             '%s%s' % (self._files['configFile'], self._TMP_SUFFIX),
             'w'
         ) as f:
-            _writelog(
-                f,
-                (
-                    "include = <{provider}.properties>\n"
-                    "\n"
-                    "self._vars.user = {user}\n"
-                    "self._vars.password = {password}\n"
-                    "self._vars.domain = {domain}\n"
-                    "\n"
-                    "pool.default.serverset.type = single\n"
-
-                    "pool.default.serverset.single.server = "
-                    "${{global:self._vars.domain}}\n"
-
-                    "pool.default.auth.type = simple\n"
-
-                    "pool.default.auth.simple.bindDN = "
-                    "${{global:self._vars.user}}\n"
-
-                    "pool.default.auth.simple.password = "
-                    "${{global:self._vars.password}}\n"
-
-                    "pool.default.ssl.startTLS = {startTLS}\n"
-
-                    "pool.default.ssl.truststore.file = "
-                    "${{local:_basedir}}/ca.jks\n"
-
-                    "pool.default.ssl.truststore.password = changeit"
-                ).format(
-                    provider=self._provider,
-                    user=self._user,
-                    password=self._password,
-                    domain=self._domain,
-                    startTLS='true' if self._cacert else 'false',
-                )
-            )
+            _writelog(f, self._driver.getConfig())
 
     def __enter__(self):
         self.checkExisting()
@@ -1023,6 +1056,14 @@ def setupLogger(log=None, debug=False):
 
 
 def convert(args, engineDir):
+
+    DRIVERS = {
+        'ad': ADLDAP,
+        'ipa': IPALDAP,
+        'rhds': RHDSLDAP,
+        'openldap': OpenLDAP,
+    }
+
     logger = logging.getLogger(Base.LOG_PREFIX)
 
     from ovirt_engine import configfile
@@ -1076,7 +1117,7 @@ def convert(args, engineDir):
             domainEntry['password'],
         )
 
-        driver = Drivers.get(domainEntry['provider'])
+        driver = DRIVERS.get(domainEntry['provider'])
         if driver is None:
             raise RuntimeError(
                 "Provider '%s' is not supported" % domainEntry['provider']
@@ -1090,12 +1131,7 @@ def convert(args, engineDir):
             domainEntry['user'],
         )
         driver.connect(
-            driver.fetchUserDN(
-                domainEntry['userid'],
-                domainEntry['user'],
-                domainEntry['password'],
-                args.cacert,
-            ),
+            domainEntry['user'],
             domainEntry['password'],
             cacert=args.cacert
         )
@@ -1104,11 +1140,8 @@ def convert(args, engineDir):
             profile=args.profile,
             authnName=args.authnName,
             authzName=args.authzName,
-            user=driver.getUserDN(),
-            password=domainEntry['password'],
-            provider=domainEntry['provider'],
-            domain=args.domain,
             cacert=args.cacert,
+            driver=driver,
             prefix=args.prefix,
         ) as aaaprofile:
             logger.info('Converting users')
