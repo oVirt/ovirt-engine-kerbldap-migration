@@ -13,7 +13,6 @@ from M2Crypto import RSA
 
 try:
     import psycopg2
-    import psycopg2.extras
 except ImportError:
     raise RuntimeError('Please install python-psycopg2')
 
