@@ -5,6 +5,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 
 
@@ -394,33 +395,59 @@ class AAADAO(object):
         )
 
 
-class Kinit():
+class Kerberos(Base):
 
-    def __init__(self, username, password):
-        self._username = username
-        self._password = password
+    def __init__(self, prefix):
+        super(Kerberos, self).__init__()
+        self._prefix = prefix
+        self._cache = None
+        self._env = None
 
-    def login(self):
+    def kinit(self, user, password):
+        self.logger.debug('kinit')
+
+        fd, self._cache = tempfile.mkstemp()
+        os.close(fd)
+        self._env = os.environ.get('KRB5CCNAME')
+        os.environ['KRB5CCNAME'] = 'FILE:%s' % self._cache
+
+        env = os.environ.copy()
+        env['KRB5_CONFIG'] = os.path.join(
+            self._prefix,
+            'etc/ovirt-engine/krb5.conf',
+        )
         p = subprocess.Popen(
             [
-                '-c',
-                """
-                KRB5_CONFIG=/etc/ovirt-engine/krb5.conf
-                echo {password} |
-                kinit {username}
-                """.format(
-                    username=self._username,
-                    password=self._password
-                )
+                'kinit',
+                user,
             ],
+            env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            shell=True,
         )
-        stdout, stderr = p.communicate()
+        stdout, stderr = p.communicate(input=password)
+        self.logger.debug('kinit stdout=%s, stderr=%s', stdout, stderr)
         if p.wait() != 0:
-            raise RuntimeError('Failed to execute kinit')
+            raise RuntimeError(
+                'Cannot authenticate to kerberos for account %s' % user
+            )
+
+    def kdestroy(self):
+        self.logger.debug('kdestroy')
+        try:
+            p = subprocess.Popen(['kdestroy'])
+            if p.wait() != 0:
+                raise RuntimeError('Failed to execute kdestroy')
+        finally:
+            if self._env is None:
+                del os.environ['KRB5CCNAME']
+            else:
+                os.environ['KRB5CCNAME'] = self._env
+            if self._cache is not None:
+                if os.path.exists(self._cache):
+                    os.unlink(self._cache)
+                self._cache = None
 
 
 class LDAP(Base):
@@ -442,28 +469,40 @@ class LDAP(Base):
         'name': 'cn',
     }
 
-    def __init__(self, domain):
+    def __init__(self, kerberos, domain):
         super(LDAP, self).__init__()
+        self._kerberos = kerberos
         self._domain = domain
 
     def fetchUserDN(self, entryId, username, password, cacert=None):
-        if isinstance(self, ADLDAP):
-            self.connect(
-                '%s@%s' % (username.split('@')[0], self._domain),
-                password,
-                cacert
-            )
-        else:
-            # Note you need cyrus-sasl-gssapi package
-            kinit = Kinit(username, password)
-            kinit.login()
+        try:
+            if isinstance(self, ADLDAP):
+                self.connect(
+                    '%s@%s' % (username.split('@')[0], self._domain),
+                    password,
+                    cacert
+                )
+            else:
+                # Note you need cyrus-sasl-gssapi package
+                self._kerberos.kinit(username, password)
+                self._conn = ldap.initialize('ldap://%s' % self._domain)
+                self._conn.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
+                self._conn.set_option(ldap.OPT_REFERRALS, 0)
+                self._conn.sasl_interactive_bind_s(
+                    '',
+                    ldap.sasl.sasl(
+                        {},
+                        'GSSAPI',
+                    ),
+                )
+            self.fetchNamespace()
+            self._userDN = self.getUser(entryId)['dn']
+            self._conn.unbind_s()
+        finally:
+            if not isinstance(self, ADLDAP):
+                self._kerberos.kdestroy()
 
-            self._conn = ldap.initialize('ldap://%s' % self._domain)
-            auth = ldap.sasl.gssapi("")
-            self._conn.sasl_interactive_bind_s("", auth)
-        self.fetchNamespace()
-        self._userDN = self.getUser(entryId)['dn']
-        self._conn.unbind_s()
+        self.logger.debug('UserDN: %s', self._userDN)
         return self._userDN
 
     def getDomain(self):
@@ -568,8 +607,8 @@ class LDAP(Base):
 
 class RHDSLDAP(LDAP):
 
-    def __init__(self, domain):
-        super(RHDSLDAP, self).__init__(domain)
+    def __init__(self, kerberos, domain):
+        super(RHDSLDAP, self).__init__(kerberos, domain)
         self.attrUserMap['principalID'] = 'nsuniqueid'
         self.attrGroupMap['groupID'] = 'nsuniqueid'
 
@@ -588,8 +627,8 @@ class RHDSLDAP(LDAP):
 
 class OpenLDAP(LDAP):
 
-    def __init__(self, domain):
-        super(OpenLDAP, self).__init__(domain)
+    def __init__(self, kerberos, domain):
+        super(OpenLDAP, self).__init__(kerberos, domain)
         self.attrUserMap['principalID'] = 'entryUUID'
         self.attrGroupMap['groupID'] = 'entryUUID'
 
@@ -604,16 +643,16 @@ class OpenLDAP(LDAP):
 
 class IPALDAP(LDAP):
 
-    def __init__(self, domain):
-        super(IPALDAP, self).__init__(domain)
+    def __init__(self, kerberos, domain):
+        super(IPALDAP, self).__init__(kerberos, domain)
         self.attrUserMap['principalID'] = 'ipaUniqueID'
         self.attrGroupMap['groupID'] = 'ipaUniqueID'
 
 
 class ADLDAP(LDAP):
 
-    def __init__(self, domain):
-        super(ADLDAP, self).__init__(domain)
+    def __init__(self, kerberos, domain):
+        super(ADLDAP, self).__init__(kerberos, domain)
         self.attrUserMap['principalID'] = 'objectGUID'
         self.attrUserMap['name'] = 'name'
         self.attrGroupMap['groupID'] = 'objectGUID'
@@ -1043,7 +1082,7 @@ def convert(args, engineDir):
                 "Provider '%s' is not supported" % domainEntry['provider']
             )
 
-        driver = driver(args.domain)
+        driver = driver(Kerberos(args.prefix), args.domain)
 
         logger.info(
             "Connecting to ldap '%s' using '%s'",
