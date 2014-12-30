@@ -140,8 +140,10 @@ class Statement(Base):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
+            self.logger.debug('Commit')
             self._connection.commit()
         else:
+            self.logger.debug('Rollback')
             self._connection.rollback()
         self._connection.close()
 
@@ -852,11 +854,13 @@ class AAAProfile(Base):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
+            self.logger.debug('Commit')
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
                     os.rename(tmp_file, f)
         else:
+            self.logger.debug('Rollback')
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
