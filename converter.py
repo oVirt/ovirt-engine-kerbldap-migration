@@ -215,7 +215,7 @@ class VdcOptions(object):
             self._get_option_for_domain(domain, 'AdUserName'),
             self._get_option_for_domain(domain, 'AdUserId'),
             self._get_option_for_domain(domain, 'AdUserPassword'),
-            provider.lower()
+            provider.lower() if provider else None
         )
 
 
@@ -401,29 +401,69 @@ class Kinit():
             raise RuntimeError('Failed to execute kinit')
 
 
-Drivers = {
-    'ad': ADLDAP.__class__,
-    'ipa': IPALDAP.__class__,
-}
-
-
 class LDAP(Base):
 
-    _username = None
+    _userDN = None
+
+    attrUserMap = {
+        'displayName': 'displayName',
+        'firstName': 'givenName',
+        'lastName': 'sn',
+        'mail': 'mail',
+        'dn': 'dn',
+        'department': 'department',
+        'name': 'cn',
+    }
+
+    attrGroupMap = {
+        'description': 'description',
+        'name': 'cn',
+    }
 
     def __init__(self, domain):
         super(LDAP, self).__init__()
         self._domain = domain
 
+    def fetchUserDN(self, entryId, username, password):
+        # Note you need cyrus-sasl-gssapi package
+        kinit = Kinit(username, password)
+        kinit.login()
+
+        self._conn = ldap.initialize('ldap://%s' % self._domain)
+        auth = ldap.sasl.gssapi("")
+        self._conn.sasl_interactive_bind_s("", auth)
+        self.fetchNamespace()
+        self._userDN = self.getUser(entryId)['dn']
+        self._conn.unbind_s()
+        return self._userDN
+
     def getDomain(self):
         return self._domain
 
-    def connect(self, username, password, uri, cacert=None):
-        self.connectSimple(username, password, uri, cacert)
+    def fetchNamespace(self):
+        self._namespace = self.search(
+            '',
+            ldap.SCOPE_BASE,
+            '(objectClass=*)',
+            ['defaultnamingcontext'],
+        )[0][1]['defaultnamingcontext'][0]
 
-    def connectSimple(self, username, password, uri, cacert=None):
-        self.logger.debug("Connect uri='%s' user='%s'", uri, username)
-        self._conn = ldap.initialize('ldap://%s' % uri)
+    def _getEntryById(self, fields, entryId):
+        ret = None
+        result = self.search(
+            self._namespace,
+            ldap.SCOPE_SUBTREE,
+            '(%s=%s)' % (self.attrUserMap['principalID'], entryId),
+            fields,
+        )
+        if result:
+            ret = result[0][1]
+            ret['principalDN'] = result[0][0]
+        return ret
+
+    def connect(self, username, password, cacert=None):
+        self.logger.debug("Connect uri='%s' user='%s'", self._domain, username)
+        self._conn = ldap.initialize('ldap://%s' % self._domain)
         if cacert is not None:
             self._conn.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
             self._conn.set_option(
@@ -434,17 +474,7 @@ class LDAP(Base):
             ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, cacert)
             self._conn.start_tls_s()
         self._conn.simple_bind_s(username, password)
-        self._username = username
-
-    def connectGssapi(self, username, password, uri):
-        # Note you need cyrus-sasl-gssapi package
-        kinit = Kinit(username, password)
-        kinit.login()
-
-        self.logger.debug("Connect uri='%s' user='%s'", uri, username)
-        self._conn = ldap.initialize('ldap://%s' % uri)
-        auth = ldap.sasl.gssapi("")
-        self._conn.sasl_interactive_bind_s("", auth)
+        self._conn.set_option(ldap.OPT_REFERRALS, 0)
 
     def search(self, baseDN, scope, filter, attributes):
         self.logger.debug(
@@ -458,128 +488,117 @@ class LDAP(Base):
         self.logger.debug('SearchResult: %s', ret)
         return ret
 
-    def getUserName(self):
-        return self._username
-
-    def getNamespace(self):
-        pass
-
-    def getUser(self, entryId):
-        pass
-
-    def getUserDN(self, entryId):
-        pass
-
-    def getGroup(self, entryId):
-        pass
-
-
-class IPALDAP(LDAP):
-
-    def __init__(self, domain):
-        super(IPALDAP, self).__init__(domain)
-
-    def connect(self, username, password, cacert):
-        super(IPALDAP, self).connectGssapi(
-            username,
-            password,
-            self.getDomain(),
-        )
-        self._conn.set_option(ldap.OPT_REFERRALS, 0)
-        self._namespace = self.search(
-            '',
-            ldap.SCOPE_BASE,
-            '(objectClass=*)',
-            ['defaultnamingcontext'],
-        )[0][1]['defaultnamingcontext'][0]
-
-    def _getEntryById(self, fields, entryId):
-        ret = None
-        result = self.search(
-            self._namespace,
-            ldap.SCOPE_SUBTREE,
-            '(ipaUniqueID=%s)' % entryId,
-            fields,
-        )
-        if result:
-            ret = result[0][1]
-            ret['dn'] = result[0][0]
-        return ret
-
     def getNamespace(self):
         return self._namespace
 
     def getUser(self, entryId):
         user = self._getEntryById(
             fields=[
-                'displayName',
-                'givenName',
-                'mail',
-                'cn',
-                'ipaUniqueID',
-                'sn',
-                'dn',
-                'uid',
+                self.attrUserMap['displayName'],
+                self.attrUserMap['firstName'],
+                self.attrUserMap['mail'],
+                self.attrUserMap['principalID'],
+                self.attrUserMap['lastName'],
+                self.attrUserMap['dn'],
+                self.attrUserMap['name'],
             ],
             entryId=entryId,
         )
         return dict(
-            department='',  # TODO: is this in IPA entry?
-            email=user.get('mail', [''])[0],
-            external_id=user['ipaUniqueID'][0],
-            name=user.get('cn', [''])[0],
+            department=user.get(self.attrUserMap['department'], [''])[0],
+            email=user.get(self.attrUserMap['mail'], [''])[0],
+            external_id=user.get(self.attrUserMap['principalID'], [''])[0],
+            name=user.get(self.attrUserMap['firstName'], [''])[0],
             namespace=self.getNamespace(),
-            surname=user.get('sn', [''])[0],
+            surname=user.get(self.attrUserMap['lastName'], [''])[0],
             user_id=str(uuid.uuid4()),
-            username=user.get('uid', [''])[0],
-            dn=user.get('dn', ['']),
+            username=user.get(self.attrUserMap['name'], [''])[0],
+            dn=user.get('principalDN', ['']),
         )
-
-    def getUserDN(self, entryId):
-        return self.getUser(entryId)['dn']
 
     def getGroup(self, entryId):
         group = self._getEntryById(
             fields=[
-                'description',
-                'cn',
-                'ipaUniqueID',
+                self.attrGroupMap['description'],
+                self.attrGroupMap['cn'],
+                self.attrGroupMap['groupID'],
             ],
             entryId=entryId,
         )
         return dict(
-            description=group.get('description', [''])[0],
-            external_id=group['ipaUniqueID'][0],
+            description=group.get(self.attrGroupMap['description'], [''])[0],
+            external_id=group.get(self.attrGroupMap['groupID'], [''])[0],
             id=str(uuid.uuid4()),
-            name=group.get('cn', [''])[0],
+            name=group.get(self.attrGroupMap['name'], [''])[0],
             namespace=self.getNamespace(),
         )
+
+    def getUserDN(self):
+        return self._userDN
+
+
+class RHDSLDAP(LDAP):
+
+    def __init__(self, domain):
+        super(RHDSLDAP, self).__init__(domain)
+        self.attrUserMap['principalID'] = 'nsuniqueid'
+        self.attrGroupMap['groupID'] = 'nsuniqueid'
+
+    def __convert_to_rhds_nsuniqueid(self, entryId):
+        s = '%s%s' % (entryId[:23], entryId[(24):])
+        s = '%s%s' % (s[:13], s[(14):])
+        s = '%s-%s' % (s[:26], s[26:])
+        return s
+
+    def _getEntryById(self, fields, entryId):
+        return super(RHDSLDAP, self)._getEntryById(
+            fields,
+            self.__convert_to_rhds_nsuniqueid(entryId)
+        )
+
+
+class OpenLDAP(LDAP):
+
+    def __init__(self, domain):
+        super(OpenLDAP, self).__init__(domain)
+        self.attrUserMap['principalID'] = 'entryUUID'
+        self.attrGroupMap['groupID'] = 'entryUUID'
+
+    def fetchNamespace(self):
+        self._namespace = self.search(
+            '',
+            ldap.SCOPE_BASE,
+            '(objectClass=*)',
+            ['namingContexts'],
+        )[0][1]['namingContexts'][0]
+
+
+class IPALDAP(LDAP):
+
+    def __init__(self, domain):
+        super(IPALDAP, self).__init__(domain)
+        self.attrUserMap['principalID'] = 'ipaUniqueID'
+        self.attrGroupMap['groupID'] = 'ipaUniqueID'
 
 
 class ADLDAP(LDAP):
 
     def __init__(self, domain):
         super(ADLDAP, self).__init__(domain)
+        self.attrUserMap['principalID'] = 'objectGUID'
+        self.attrUserMap['name'] = 'name'
+        self.attrGroupMap['groupID'] = 'objectGUID'
+        self.attrGroupMap['name'] = 'name'
 
-    def connect(self, username, password, cacert):
-        super(ADLDAP, self).connect(
-            '%s@%s' % (
-                username.split('@')[0],  # Get rid of realm
-                self.getDomain()
-            ),
-            password,
-            self.getDomain(),
-            cacert,
-        )
-        self._conn.set_option(ldap.OPT_REFERRALS, 0)
-        self._configurationNamingContext = self.search(
+    def fetchNamespace(self):
+        _configurationNamingContext = self.search(
             '',
             ldap.SCOPE_BASE,
             '(objectclass=*)',
             ['configurationNamingContext']
         )[0][1]['configurationNamingContext'][0]
         self._namespace = self.search(
-            'CN=Partitions,%s' % self._configurationNamingContext,
+            'CN=Partitions,%s' % _configurationNamingContext,
             ldap.SCOPE_SUBTREE,
             '(&(objectClass=crossRef)(dnsRoot=%s)(nETBIOSName=*))' % (
                 self.getDomain(),
@@ -588,67 +607,28 @@ class ADLDAP(LDAP):
         )[0][1]['nCName'][0]
 
     def _getEntryById(self, fields, entryId):
-        ret = None
-        result = self.search(
-            self._namespace,
-            ldap.SCOPE_SUBTREE,
-            '(objectGUID=%s)' % ldap.filter.escape_filter_chars(
-                uuid.UUID(entryId).bytes_le
-            ),
+        return super(ADLDAP, self)._getEntryById(
             fields,
+            ldap.filter.escape_filter_chars(uuid.UUID(entryId).bytes_le)
         )
-        if result:
-            ret = result[0][1]
-        return ret
-
-    def getNamespace(self):
-        return self._namespace
 
     def getUser(self, entryId):
-        user = self._getEntryById(
-            fields=[
-                'department',
-                'displayName',
-                'givenName',
-                'mail',
-                'name',
-                'objectGUID',
-                'sn',
-                'title',
-                'userPrincipalName',
-            ],
-            entryId=entryId,
-        )
-        return dict(
-            department=user.get('department', [''])[0],
-            email=user.get('mail', [''])[0],
-            external_id=base64.b64encode(user['objectGUID'][0]),
-            name=user.get('name', [''])[0],
-            namespace=self.getNamespace(),
-            surname=user.get('sn', [''])[0],
-            user_id=str(uuid.uuid4()),
-            username=user.get('userPrincipalName', [''])[0],
-        )
-
-    def getUserDN(self, entryId):
-        return self.getUser(entryId)['username']
+        user = super(ADLDAP, self).getUser(entryId)
+        user['principalID'] = base64.b64encode(user['principalID'])
+        return user
 
     def getGroup(self, entryId):
-        group = self._getEntryById(
-            fields=[
-                'description',
-                'name',
-                'objectGUID',
-            ],
-            entryId=entryId,
-        )
-        return dict(
-            description=group.get('description', [''])[0],
-            external_id=base64.b64encode(group['objectGUID'][0]),
-            id=str(uuid.uuid4()),
-            name=group.get('name', [''])[0],
-            namespace=self.getNamespace(),
-        )
+        group = super(ADLDAP, self).getGroup(entryId)
+        group['groupID'] = base64.b64encode(group['groupID'])
+        return group
+
+
+Drivers = {
+    'ad': ADLDAP,
+    'ipa': IPALDAP,
+    'rhds': RHDSLDAP,
+    'openldap': OpenLDAP,
+}
 
 
 class AAAProfile(Base):
@@ -1040,8 +1020,9 @@ def convert(args, engineDir):
             user_name,
         )
         driver = Drivers[provider](args.domain)
+        userDN = driver.fetchUserDN(user_id, user_name, password)
         driver.connect(
-            user_name,
+            userDN,
             password,
             cacert=args.cacert
         )
@@ -1050,7 +1031,7 @@ def convert(args, engineDir):
             profile=args.profile,
             authnName=args.authnName,
             authzName=args.authzName,
-            user=driver.getUserDN(user_id),
+            user=driver.getUserDN(),
             provider=provider,
             password=password,
             domain=args.domain,
