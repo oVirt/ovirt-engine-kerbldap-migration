@@ -1,8 +1,10 @@
 #!/usr/bin/python
 import base64
 import glob
+import grp
 import logging
 import os
+import pwd
 import subprocess
 import sys
 import tempfile
@@ -976,10 +978,17 @@ class AAAProfile(Base):
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
             self.logger.debug('Commit')
+            oldmask = os.umask(006)
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
+                    if os.getuid() == 0:
+                        uid = pwd.getpwnam('ovirt').pw_uid
+                        gid = grp.getgrnam('ovirt').gr_gid
+                        os.chown(f, uid, gid)
                     os.rename(tmp_file, f)
+            os.umask(oldmask)
+
         else:
             self.logger.debug('Rollback')
             for f in self._files.values():
