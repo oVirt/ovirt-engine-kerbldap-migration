@@ -506,13 +506,16 @@ class LDAP(Base):
     def getDomain(self):
         return self._domain
 
-    def connect(self, username, password, cacert=None):
+    def connect(self, username, password, bindDN=None, cacert=None):
         self.logger.debug(
             "Connect uri='%s' user='%s'",
             self._domain,
             username,
         )
-        self._bindUser = self._determineBindUser(username, password)
+        if bindDN is None:
+            self._bindUser = self._determineBindUser(username, password)
+        else:
+            self._bindUser = bindDN
         self._bindPassword = password
         self._bindSSL = cacert is not None
         self._connection = ldap.initialize('ldap://%s' % self._domain)
@@ -1049,6 +1052,17 @@ def parse_args():
         dest='profile',
         help='new profile name, default old profile name with -new suffix',
     )
+    parser.add_argument(
+        '--bind-dn',
+        dest='bindDN',
+        help='use this DN to bind, instead of kerberos user',
+    )
+    parser.add_argument(
+        '--bind-password',
+        dest='bindPassword',
+        help='password for ldap bind user',
+    )
+
     args = parser.parse_args(sys.argv[1:])
     if not args.authnName:
         args.authnName = '%s-authn' % args.domain
@@ -1178,7 +1192,8 @@ def convert(args, engineDir):
         )
         driver.connect(
             domainEntry['user'],
-            domainEntry['password'],
+            args.bindPassword if args.bindPassword else domainEntry['password'],
+            bindDN=args.bindDN,
             cacert=args.cacert
         )
 
