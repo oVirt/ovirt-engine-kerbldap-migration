@@ -506,7 +506,7 @@ class LDAP(Base):
     def getDomain(self):
         return self._domain
 
-    def connect(self, username, password, bindDN=None, cacert=None):
+    def connect(self, username, password, bindDN=None, ldapServer=None cacert=None):
         self.logger.debug(
             "Connect uri='%s' user='%s'",
             self._domain,
@@ -1062,6 +1062,11 @@ def parse_args():
         dest='bindPassword',
         help='password for ldap bind user',
     )
+    parser.add_argument(
+        '--ldap-server',
+        dest='ldapServer',
+        help='use this instead of domain',
+    )
 
     args = parser.parse_args(sys.argv[1:])
     if not args.authnName:
@@ -1182,12 +1187,15 @@ def convert(args, engineDir):
             raise RuntimeError(
                 "Provider '%s' is not supported" % domainEntry['provider']
             )
+        ldapServer = args.domain
+        if args.ldapServer:
+            ldapServer = args.ldapServer
 
-        driver = driver(Kerberos(args.prefix), args.domain)
+        driver = driver(Kerberos(args.prefix), ldapServer)
 
         logger.info(
             "Connecting to ldap '%s' using '%s'",
-            args.domain,
+            ldapServer,
             domainEntry['user'],
         )
         driver.connect(
