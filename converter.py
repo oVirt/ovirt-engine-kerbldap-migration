@@ -13,6 +13,11 @@ from M2Crypto import RSA
 
 
 try:
+    import dns.resolver
+except ImportError:
+    raise RuntimeError('Please install python-dns')
+
+try:
     import psycopg2
 except ImportError:
     raise RuntimeError('Please install python-psycopg2')
@@ -456,6 +461,7 @@ class LDAP(Base):
     _bindUser = None
     _bindPassword = None
     _bindSSL = False
+    _servers = None
 
     def __init__(self, kerberos, domain):
         super(LDAP, self).__init__()
@@ -468,6 +474,9 @@ class LDAP(Base):
     def _determineBindUser(self, username, password):
         return username
 
+    def _determineServers(self):
+        return [self._domain]
+
     def _decodeLegacyEntryId(self, id):
         return id
 
@@ -477,7 +486,7 @@ class LDAP(Base):
     def _getEntryById(self, attrs, entryId):
         ret = None
         result = self.search(
-            self._namespace,
+            self.getNamespace(),
             ldap.SCOPE_SUBTREE,
             '(%s=%s)' % (
                 attrs['entryId'],
@@ -519,6 +528,7 @@ class LDAP(Base):
             self._connection.start_tls_s()
         self._connection.simple_bind_s(self._bindUser, password)
         self._namespace = self._determineNamespace()
+        self._servers = self._determineServers()
 
     def search(self, baseDN, scope, filter, attributes, connection=None):
         self.logger.debug(
@@ -560,6 +570,9 @@ class LDAP(Base):
     def getUserDN(self):
         return self._bindUser
 
+    def getServers(self):
+        return self._servers
+
 
 class SimpleLDAP(LDAP):
 
@@ -573,7 +586,7 @@ class SimpleLDAP(LDAP):
             '(objectClass=*)',
             [self._simpleNamespaceAttribute],
             connection=connection,
-        )[0][1]['defaultnamingcontext'][0]
+        )[0][1][self._simpleNamespaceAttribute][0]
 
     def _determineBindUser(self, username, password):
         try:
@@ -589,24 +602,47 @@ class SimpleLDAP(LDAP):
                     'GSSAPI',
                 ),
             )
-            #@ALON: TODO: fetch by user name
-            #@ALON: TODO: search directly as we need to use
-            #this connection.
-            user = self.getUser('TODO')['__dn']
+            self._namespace = self._determineNamespace(connection)
+            user = self.search(
+                self._namespace,
+                ldap.SCOPE_SUBTREE,
+                '(%s=%s)' % (
+                    self._attrUserMap['username'],
+                    username.split('@')[0],
+                ),
+                [self._attrUserMap['entryId']],
+                connection=connection,
+            )[0][0]
+
             connection.unbind_s()
             return user
         finally:
             self._kerberos.kdestroy()
 
+    def _determineServers(self):
+        servers = [
+            srvdata for srvdata in dns.resolver.query(
+                '_ldap._tcp.%s' % self._domain,
+                'SRV',
+            )
+        ]
+        if not servers:
+            return [self._domain]
+
+        sorted(servers, key=lambda server: server.priority, reverse=True)
+        return servers
+
     def getConfig(self):
         return (
             "include = <{provider}.properties>\n"
             "\n"
-            "self._vars.server = {server}\n"
-            "self._vars.user = {user}\n"
-            "self._vars.password = {password}\n"
+            "vars.server = {server}\n"
+            "vars.user = {user}\n"
+            "vars.password = {password}\n"
+            "{failovers_variables}\n"
             "\n"
             "pool.default.serverset.single.server = ${{global:vars.server}}\n"
+            "{failovers_servers}\n"
             "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
             "pool.default.auth.simple.password = ${{global:vars.password}}\n"
             "\n"
@@ -617,7 +653,17 @@ class SimpleLDAP(LDAP):
             provider=self._simpleProvider,
             user=self._bindUser,
             password=self._bindPassword,
-            server=self._server,    # TODO: figure it out
+            server=self.getServers()[0].target,
+            failovers_variables='\n'.join([
+                'vars.failover%s = %s' % (
+                    i, self.getServers()[i].target
+                ) for i in range(1, len(self.getServers()))
+            ]),
+            failovers_servers='\n'.join([(
+                    'pool.default.serverset.failover.server.%s.name'
+                    ' = ${global:vars.failover%s}' % (i, i)
+                ) for i in range(1, len(self.getServers()))
+            ]),
             startTLS='true' if self._bindSSL else 'false',
         )
 
