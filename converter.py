@@ -672,7 +672,8 @@ class SimpleLDAP(LDAP):
                     i, self.getServers()[i].target
                 ) for i in range(1, len(self.getServers()))
             ]),
-            failovers_servers='\n'.join([(
+            failovers_servers='\n'.join([
+                (
                     'pool.default.serverset.failover.server.%s.name'
                     ' = ${global:vars.failover%s}' % (i, i)
                 ) for i in range(1, len(self.getServers()))
@@ -1213,7 +1214,10 @@ def convert(args, engineDir):
         )
         driver.connect(
             domainEntry['user'],
-            args.bindPassword if args.bindPassword else domainEntry['password'],
+            (
+                args.bindPassword if args.bindPassword
+                else domainEntry['password']
+            ),
             bindDN=args.bindDN,
             cacert=args.cacert
         )
