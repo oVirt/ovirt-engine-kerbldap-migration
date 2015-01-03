@@ -508,7 +508,14 @@ class LDAP(Base):
     def getDomain(self):
         return self._domain
 
-    def connect(self, username, password, bindDN=None, ldapServer=None cacert=None):
+    def connect(
+        self,
+        username,
+        password,
+        bindDN=None,
+        ldapServer=None,
+        cacert=None
+    ):
         self.logger.debug(
             "Connect uri='%s' user='%s'",
             self._domain,
@@ -968,12 +975,12 @@ class AAAProfile(Base):
 
     def __enter__(self):
         self.checkExisting()
+        self.oldmask = os.umask(006)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
             self.logger.debug('Commit')
-            oldmask = os.umask(006)
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
@@ -982,7 +989,6 @@ class AAAProfile(Base):
                         gid = grp.getgrnam('ovirt').gr_gid
                         os.chown(f, uid, gid)
                     os.rename(tmp_file, f)
-            os.umask(oldmask)
 
         else:
             self.logger.debug('Rollback')
@@ -990,6 +996,8 @@ class AAAProfile(Base):
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
                     os.unlink(tmp_file)
+
+        os.umask(self.oldmask)
 
 
 class RollbackError(RuntimeError):
