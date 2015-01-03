@@ -973,11 +973,17 @@ class AAAProfile(Base):
             '%s%s' % (self._files['configFile'], self._TMP_SUFFIX),
             'w'
         ) as f:
+            os.chmod(f.name, 0o660)
+            if os.getuid() == 0:
+                os.chown(
+                    f.name,
+                    pwd.getpwnam('ovirt').pw_uid,
+                    grp.getgrnam('ovirt').gr_gid,
+                )
             _writelog(f, self._driver.getConfig())
 
     def __enter__(self):
         self.checkExisting()
-        self.oldmask = os.umask(0o006)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -986,10 +992,6 @@ class AAAProfile(Base):
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
-                    if os.getuid() == 0:
-                        uid = pwd.getpwnam('ovirt').pw_uid
-                        gid = grp.getgrnam('ovirt').gr_gid
-                        os.chown(tmp_file, uid, gid)
                     os.rename(tmp_file, f)
 
         else:
@@ -998,8 +1000,6 @@ class AAAProfile(Base):
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
                     os.unlink(tmp_file)
-
-        os.umask(self.oldmask)
 
 
 class RollbackError(RuntimeError):
