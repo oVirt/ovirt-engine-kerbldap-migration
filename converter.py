@@ -607,6 +607,7 @@ class SimpleLDAP(LDAP):
             connection = ldap.initialize('ldap://%s' % self._domain)
             connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
             connection.set_option(ldap.OPT_REFERRALS, 0)
+            connection.set_option(ldap.OPT_X_SASL_NOCANON, True)
             connection.sasl_interactive_bind_s(
                 '',
                 ldap.sasl.sasl(
