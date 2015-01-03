@@ -696,12 +696,7 @@ class RHDSLDAP(SimpleLDAP):
         super(RHDSLDAP, self).__init__(*args, **kwargs)
 
     def _decodeLegacyEntryId(self, id):
-        #@ALON: please simplify I cannot understand what it does
-        #@ALON: a simple return "%s%s%s%s" % (id[], id[])
-        s = '%s%s' % (id[:23], id[24:])
-        s = '%s%s' % (s[:13], s[14:])
-        s = '%s-%s' % (s[:26], s[26:])
-        return s
+        return '%s%s%s-%s' % (id[:13], id[14:23], id[24:28], id[28:])
 
 
 class OpenLDAP(SimpleLDAP):
