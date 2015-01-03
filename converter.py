@@ -988,7 +988,7 @@ class AAAProfile(Base):
                     if os.getuid() == 0:
                         uid = pwd.getpwnam('ovirt').pw_uid
                         gid = grp.getgrnam('ovirt').gr_gid
-                        os.chown(f, uid, gid)
+                        os.chown(tmp_file, uid, gid)
                     os.rename(tmp_file, f)
 
         else:
