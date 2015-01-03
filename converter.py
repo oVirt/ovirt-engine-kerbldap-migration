@@ -1382,8 +1382,27 @@ def convert(args, engineDir):
             logger.info('Creating new extensions configuration')
             aaaprofile.save()
 
+            logger.info('Conversion completed')
+
+            if args.cacert is None:
+                logger.warning(
+                    'We strongly suggest to enable SSL, '
+                    'you can do this later, please refer to '
+                    'ovirt-engine-extension-aaa-ldap documentation'
+                )
+
+            if domainEntry['provider'] != 'ad':
+                logger.info(
+                    'Conversion was done using single server. '
+                    'Please refer to ovirt-engine-extension-aaa-ldap '
+                    'documentation if you would like to apply failover or '
+                    'other fallback policy.'
+                )
+
             if not args.apply:
-                raise RollbackError('Apply was not specified rolling back')
+                raise RollbackError(
+                    'Apply parameter was not specified rolling back'
+                )
 
 
 def main():
