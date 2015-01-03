@@ -164,11 +164,11 @@ class OptionDecrypt(Base):
         password = 'mypass'
         p = subprocess.Popen(
             [
-                "openssl",
-                "pkcs12",
-                "-nocerts", "-nodes",
-                "-in", pkcs12,
-                "-passin", "pass:%s" % password,
+                'openssl',
+                'pkcs12',
+                '-nocerts', '-nodes',
+                '-in', pkcs12,
+                '-passin', 'pass:%s' % password,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -647,21 +647,21 @@ class SimpleLDAP(LDAP):
 
     def getConfig(self):
         return (
-            "include = <{provider}.properties>\n"
-            "\n"
-            "vars.server = {server}\n"
-            "vars.user = {user}\n"
-            "vars.password = {password}\n"
-            "{failovers_variables}\n"
-            "\n"
-            "pool.default.serverset.single.server = ${{global:vars.server}}\n"
-            "{failovers_servers}\n"
-            "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
-            "pool.default.auth.simple.password = ${{global:vars.password}}\n"
-            "\n"
-            "pool.default.ssl.startTLS = {startTLS}\n"
-            "pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n"
-            "pool.default.ssl.truststore.password = changeit"
+            'include = <{provider}.properties>\n'
+            '\n'
+            'vars.server = {server}\n'
+            'vars.user = {user}\n'
+            'vars.password = {password}\n'
+            '{failovers_variables}\n'
+            '\n'
+            'pool.default.serverset.single.server = ${{global:vars.server}}\n'
+            '{failovers_servers}\n'
+            'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
+            'pool.default.auth.simple.password = ${{global:vars.password}}\n'
+            '\n'
+            'pool.default.ssl.startTLS = {startTLS}\n'
+            'pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n'
+            'pool.default.ssl.truststore.password = changeit'
         ).format(
             provider=self._simpleProvider,
             user=self._bindUser,
@@ -805,21 +805,21 @@ class ADLDAP(LDAP):
 
     def getConfig(self):
         return (
-            "include = <ad.properties>\n"
-            "\n"
-            "self._vars.domain = {domain}\n"
-            "self._vars.user = {user}\n"
-            "self._vars.password = {password}\n"
-            "\n"
-            "pool.default.serverset.type = srvrecord\n"
-            "pool.default.serverset.srvrecord.domain = "
-            "${{global:vars.domain}}\n"
-            "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
-            "pool.default.auth.simple.password = ${{global:vars.password}}\n"
-            "\n"
-            "pool.default.ssl.startTLS = {startTLS}\n"
-            "pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n"
-            "pool.default.ssl.truststore.password = changeit"
+            'include = <ad.properties>\n'
+            '\n'
+            'self._vars.domain = {domain}\n'
+            'self._vars.user = {user}\n'
+            'self._vars.password = {password}\n'
+            '\n'
+            'pool.default.serverset.type = srvrecord\n'
+            'pool.default.serverset.srvrecord.domain = '
+            '${{global:vars.domain}}\n'
+            'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
+            'pool.default.auth.simple.password = ${{global:vars.password}}\n'
+            '\n'
+            'pool.default.ssl.startTLS = {startTLS}\n'
+            'pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n'
+            'pool.default.ssl.truststore.password = changeit'
         ).format(
             user=self._bindUser,
             password=self._bindPassword,
@@ -927,20 +927,20 @@ class AAAProfile(Base):
             _writelog(
                 f,
                 (
-                    "ovirt.engine.extension.name = {authzName}\n"
+                    'ovirt.engine.extension.name = {authzName}\n'
 
-                    "ovirt.engine.extension.bindings.method = "
-                    "jbossmodule\n"
+                    'ovirt.engine.extension.bindings.method = '
+                    'jbossmodule\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.module = "
-                    "org.ovirt.engine-extensions.aaa.ldap\n"
+                    'ovirt.engine.extension.binding.jbossmodule.module = '
+                    'org.ovirt.engine-extensions.aaa.ldap\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.class = "
-                    "org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n"
-                    "ovirt.engine.extension.provides = "
+                    'ovirt.engine.extension.binding.jbossmodule.class = '
+                    'org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n'
+                    'ovirt.engine.extension.provides = '
 
-                    "org.ovirt.engine.api.extensions.aaa.Authz\n"
-                    "config.profile.file.1 = {configFile}\n"
+                    'org.ovirt.engine.api.extensions.aaa.Authz\n'
+                    'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
         with open(
@@ -950,23 +950,23 @@ class AAAProfile(Base):
             _writelog(
                 f,
                 (
-                    "ovirt.engine.extension.name = {authnName}\n"
+                    'ovirt.engine.extension.name = {authnName}\n'
 
-                    "ovirt.engine.extension.bindings.method = "
-                    "jbossmodule\n"
+                    'ovirt.engine.extension.bindings.method = '
+                    'jbossmodule\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.module = "
-                    "org.ovirt.engine-extensions.aaa.ldap\n"
+                    'ovirt.engine.extension.binding.jbossmodule.module = '
+                    'org.ovirt.engine-extensions.aaa.ldap\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.class = "
-                    "org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n"
+                    'ovirt.engine.extension.binding.jbossmodule.class = '
+                    'org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n'
 
-                    "ovirt.engine.extension.provides = "
-                    "org.ovirt.engine.api.extensions.aaa.Authn\n"
+                    'ovirt.engine.extension.provides = '
+                    'org.ovirt.engine.api.extensions.aaa.Authn\n'
 
-                    "ovirt.engine.aaa.authn.profile.name = {profile}\n"
-                    "ovirt.engine.aaa.authn.authz.plugin = {authzName}\n"
-                    "config.profile.file.1 = {configFile}\n"
+                    'ovirt.engine.aaa.authn.profile.name = {profile}\n'
+                    'ovirt.engine.aaa.authn.authz.plugin = {authzName}\n'
+                    'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
         with open(
@@ -977,7 +977,7 @@ class AAAProfile(Base):
 
     def __enter__(self):
         self.checkExisting()
-        self.oldmask = os.umask(006)
+        self.oldmask = os.umask(0o006)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -1083,6 +1083,12 @@ def parse_args():
     )
 
     args = parser.parse_args(sys.argv[1:])
+
+    if args.domain == args.profile:
+        raise RuntimeError(
+            'Profile cannot be the same as domain',
+        )
+
     if not args.authnName:
         args.authnName = '%s-authn' % args.domain
 
@@ -1179,12 +1185,15 @@ def convert(args, engineDir):
 
     with statement:
         aaadao = AAADAO(statement)
+
+        logger.info('Sanity checks')
         if aaadao.isDomainExists(args.authzName):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % (
                     args.authzName
                 )
             )
+
         logger.info('Loading options')
         domainEntry = VdcOptions(statement).getDomainEntry(args.domain)
         if not all([domainEntry.values()]):
@@ -1349,7 +1358,7 @@ def main():
     return ret
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())
 
 
