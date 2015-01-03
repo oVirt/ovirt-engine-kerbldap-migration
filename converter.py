@@ -1093,7 +1093,7 @@ def parse_args():
     parser.add_argument(
         '--prefix',
         default='/',
-        help='for testing withing dev env',
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         '--debug',
@@ -1108,15 +1108,6 @@ def parse_args():
         help='write log into file',
     )
     parser.add_argument(
-        '--cacert',
-        metavar='FILE',
-        required=True,
-        help=(
-            'certificate chain to use for ssl, '
-            'or "NONE" if you do not want SSL'
-        ),
-    )
-    parser.add_argument(
         '--apply',
         default=False,
         action='store_true',
@@ -1129,33 +1120,48 @@ def parse_args():
         help='domain name to convert',
     )
     parser.add_argument(
+        '--cacert',
+        metavar='FILE',
+        required=True,
+        help=(
+            'certificate chain to use for ssl, '
+            'or "NONE" if you do not want SSL'
+        ),
+    )
+    parser.add_argument(
         '--authn-name',
         dest='authnName',
+        metavar='NAME',
         help='authn extension name, default profile name with -authn suffix',
     )
     parser.add_argument(
         '--authz-name',
         dest='authzName',
+        metavar='NAME',
         help='authz extension name, default profile name with -authz suffix',
     )
     parser.add_argument(
         '--profile',
         dest='profile',
+        metavar='NAME',
         help='new profile name, default old profile name with -new suffix',
     )
     parser.add_argument(
         '--bind-user',
         dest='bindUser',
+        metavar='DN',
         help='use this user to bind, instead of performing autodetection',
     )
     parser.add_argument(
         '--bind-password',
         dest='bindPassword',
+        metavar='PASSWORD',
         help="use this password instead of reusing sasl user's password",
     )
     parser.add_argument(
         '--ldap-servers',
         dest='ldapServers',
+        metavar='DNS',
         help=(
             'specify ldap servers explicitly instead of performing  '
             'autodetection'
