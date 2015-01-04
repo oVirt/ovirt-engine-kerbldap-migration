@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# Note you need cyrus-sasl-gssapi package
 import base64
 import glob
 import grp
@@ -8,6 +9,7 @@ import pwd
 import subprocess
 import sys
 import tempfile
+import urlparse
 import uuid
 
 
@@ -164,11 +166,11 @@ class OptionDecrypt(Base):
         password = 'mypass'
         p = subprocess.Popen(
             [
-                "openssl",
-                "pkcs12",
-                "-nocerts", "-nodes",
-                "-in", pkcs12,
-                "-passin", "pass:%s" % password,
+                'openssl',
+                'pkcs12',
+                '-nocerts', '-nodes',
+                '-in', pkcs12,
+                '-passin', 'pass:%s' % password,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -401,6 +403,33 @@ class AAADAO(object):
         )
 
 
+class DNS(Base):
+
+    def __init__(self):
+        super(DNS, self).__init__()
+
+    def resolveSRVRecord(self, domain, protocol, service):
+        query = '_%s._%s.%s' % (service, protocol, domain)
+        response = dns.resolver.query(query, 'SRV')
+        self.logger.debug(
+            "Query result for srvrecord '%s': %s",
+            query,
+            response.response,
+        )
+        if not response:
+            raise RuntimeError("Cannot resolve domain '%s'" % domain)
+
+        ret = [
+            entry.target.to_text() for entry in sorted(
+                response,
+                key=lambda e: e.priority,
+                reverse=True,
+            )
+        ]
+        self.logger.debug('Return: %s', ret)
+        return ret
+
+
 class Kerberos(Base):
 
     def __init__(self, prefix):
@@ -460,27 +489,35 @@ class LDAP(Base):
 
     _attrUserMap = None
     _attrGroupMap = None
+
+    _profile = None
     _bindUser = None
     _bindPassword = None
-    _bindSSL = False
-    _servers = None
+    _bindURI = None
+    _cacert = None
 
-    def __init__(self, kerberos, domain):
+    def __init__(self, kerberos, profile):
         super(LDAP, self).__init__()
         self._kerberos = kerberos
-        self._domain = domain
+        self._profile = profile
 
     def _determineNamespace(self, connection=None):
         return None
 
-    def _determineBindUser(self, username, password):
-        return username
-
-    def _determineServers(self):
-        return [self._domain]
+    def _determineBindUser(
+        self,
+        dnsDomain,
+        ldapServers,
+        saslUser,
+        bindPassword,
+    ):
+        return saslUser.split('@', 1)[0]
 
     def _decodeLegacyEntryId(self, id):
         return id
+
+    def _determineBindURI(self, dnsDomain, ldapServers):
+        return 'ldap://%s' % (ldapServers[0] if ldapServers else dnsDomain)
 
     def _encodeLdapId(self, id):
         return id
@@ -505,42 +542,61 @@ class LDAP(Base):
             ret['entryId'] = self._encodeLdapId(ret['entryId'])
         return ret
 
-    def getDomain(self):
-        return self._domain
-
     def connect(
         self,
-        username,
-        password,
-        bindDN=None,
-        ldapServer=None,
+        dnsDomain,
+        ldapServers,
+        saslUser,
+        bindPassword,
+        bindUser,
         cacert=None
     ):
         self.logger.debug(
-            "Connect uri='%s' user='%s'",
-            self._domain,
-            username,
+            (
+                "Entry dnsDomain='%s', ldapServers=%s, saslUser='%s', "
+                "bindUser='%s', cacert='%s'"
+            ),
+            dnsDomain,
+            ldapServers,
+            saslUser,
+            bindUser,
+            cacert,
         )
-        if bindDN is None:
-            self._bindUser = self._determineBindUser(username, password)
-        else:
-            self._bindUser = bindDN
-        self._bindPassword = password
-        self._bindSSL = cacert is not None
-        self._connection = ldap.initialize('ldap://%s' % self._domain)
+        self._bindUser = (
+            bindUser if bindUser
+            else self._determineBindUser(
+                dnsDomain,
+                ldapServers,
+                saslUser,
+                bindPassword,
+            )
+        )
+        self._bindPassword = bindPassword
+        self._cacert = cacert
+        self._bindURI = self._determineBindURI(
+            dnsDomain,
+            ldapServers,
+        )
+
+        self.logger.debug(
+            "connect uri='%s', cacert='%s', bindUser='%s'",
+            self._bindURI,
+            self._cacert,
+            self._bindUser,
+        )
+        self._connection = ldap.initialize(self._bindURI)
         self._connection.set_option(ldap.OPT_REFERRALS, 0)
         self._connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
-        if cacert is not None:
+        if self._cacert:
             self._connection.set_option(
                 ldap.OPT_X_TLS_REQUIRE_CERT,
                 ldap.OPT_X_TLS_DEMAND
             )
             # does not work per connection?
-            ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, cacert)
+            ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, self._cacert)
             self._connection.start_tls_s()
-        self._connection.simple_bind_s(self._bindUser, password)
+        self._connection.simple_bind_s(self._bindUser, self._bindPassword)
         self._namespace = self._determineNamespace()
-        self._servers = self._determineServers()
 
     def search(self, baseDN, scope, filter, attributes, connection=None):
         self.logger.debug(
@@ -555,6 +611,9 @@ class LDAP(Base):
         ret = connection.search_s(baseDN, scope, filter, attributes)
         self.logger.debug('SearchResult: %s', ret)
         return ret
+
+    def getCACert(self):
+        return self._cacert
 
     def getNamespace(self):
         return self._namespace
@@ -600,11 +659,22 @@ class SimpleLDAP(LDAP):
             connection=connection,
         )[0][1][self._simpleNamespaceAttribute][0]
 
-    def _determineBindUser(self, username, password):
+    def _determineBindUser(
+        self,
+        dnsDomain,
+        ldapServers,
+        saslUser,
+        bindPassword,
+    ):
+        self._kerberos.kinit(saslUser, bindPassword)
+        connection = None
         try:
-            # Note you need cyrus-sasl-gssapi package
-            self._kerberos.kinit(username, password)
-            connection = ldap.initialize('ldap://%s' % self._domain)
+            connection = ldap.initialize(
+                'ldap://%s' % (
+                    ldapServers[0] if ldapServers
+                    else dnsDomain
+                )
+            )
             connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
             connection.set_option(ldap.OPT_REFERRALS, 0)
             connection.set_option(ldap.OPT_X_SASL_NOCANON, True)
@@ -615,69 +685,55 @@ class SimpleLDAP(LDAP):
                     'GSSAPI',
                 ),
             )
-            self._namespace = self._determineNamespace(connection)
-            user = self.search(
-                self._namespace,
+            entry = self.search(
+                self._determineNamespace(connection),
                 ldap.SCOPE_SUBTREE,
-                '(%s=%s)' % (
+                '(&%s(%s=%s))' % (
+                    self._simpleUserFilter,
                     self._attrUserMap['username'],
-                    username.split('@')[0],
+                    saslUser.split('@')[0],
                 ),
                 [self._attrUserMap['entryId']],
                 connection=connection,
-            )[0][0]
+            )
 
-            connection.unbind_s()
-            return user
+            if not entry:
+                raise RuntimeError(
+                    "Cannot resolve user '%s' into DN",
+                    saslUser,
+                )
+
+            return entry[0][0]
         finally:
+            if connection:
+                connection.unbind_s()
             self._kerberos.kdestroy()
 
-    def _determineServers(self):
-        servers = [
-            srvdata for srvdata in dns.resolver.query(
-                '_ldap._tcp.%s' % self._domain,
-                'SRV',
+    def _determineBindURI(self, dnsDomain, ldapServers):
+        if ldapServers is None:
+            ldapServers = DNS().resolveSRVRecord(
+                domain=dnsDomain,
+                protocol='tcp',
+                service='ldap',
             )
-        ]
-        if not servers:
-            return [self._domain]
-
-        sorted(servers, key=lambda server: server.priority, reverse=True)
-        return servers
+        return 'ldap://%s' % ldapServers[0]
 
     def getConfig(self):
         return (
-            "include = <{provider}.properties>\n"
-            "\n"
-            "vars.server = {server}\n"
-            "vars.user = {user}\n"
-            "vars.password = {password}\n"
-            "{failovers_variables}\n"
-            "\n"
-            "pool.default.serverset.single.server = ${{global:vars.server}}\n"
-            "{failovers_servers}\n"
-            "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
-            "pool.default.auth.simple.password = ${{global:vars.password}}\n"
-            "\n"
-            "pool.default.ssl.startTLS = {startTLS}\n"
-            "pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n"
-            "pool.default.ssl.truststore.password = changeit"
+            'include = <{provider}.properties>\n'
+            '\n'
+            'vars.server = {server}\n'
+            'vars.user = {user}\n'
+            'vars.password = {password}\n'
+            '\n'
+            'pool.default.serverset.single.server = ${{global:vars.server}}\n'
+            'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
+            'pool.default.auth.simple.password = ${{global:vars.password}}\n'
         ).format(
             provider=self._simpleProvider,
             user=self._bindUser,
             password=self._bindPassword,
-            server=self.getServers()[0].target,
-            failovers_variables='\n'.join([
-                'vars.failover%s = %s' % (
-                    i, self.getServers()[i].target
-                ) for i in range(1, len(self.getServers()))
-            ]),
-            failovers_servers='\n'.join([(
-                    'pool.default.serverset.failover.server.%s.name'
-                    ' = ${global:vars.failover%s}' % (i, i)
-                ) for i in range(1, len(self.getServers()))
-            ]),
-            startTLS='true' if self._bindSSL else 'false',
+            server=urlparse.urlparse(self._bindURI).netloc,
         )
 
 
@@ -691,7 +747,7 @@ class RHDSLDAP(SimpleLDAP):
         'surname': 'sn',
         'email': 'mail',
         'department': 'department',
-        'username': 'cn',
+        'username': 'uid',
     }
 
     _attrGroupMap = {
@@ -699,6 +755,8 @@ class RHDSLDAP(SimpleLDAP):
         'description': 'description',
         'name': 'cn',
     }
+
+    _simpleUserFilter = '(objectClass=organizationalPerson)(uid=*)'
 
     def __init__(self, *args, **kwargs):
         super(RHDSLDAP, self).__init__(*args, **kwargs)
@@ -717,7 +775,7 @@ class OpenLDAP(SimpleLDAP):
         'surname': 'sn',
         'email': 'mail',
         'department': 'department',
-        'username': 'cn',
+        'username': 'uid',
     }
 
     _attrGroupMap = {
@@ -727,6 +785,7 @@ class OpenLDAP(SimpleLDAP):
     }
 
     _simpleNamespaceAttribute = 'namingContexts'
+    _simpleUserFilter = '(objectClass=uidObject)(uid=*)'
 
     def __init__(self, *args, **kwargs):
         super(OpenLDAP, self).__init__(*args, **kwargs)
@@ -742,7 +801,7 @@ class IPALDAP(SimpleLDAP):
         'surname': 'sn',
         'email': 'mail',
         'department': 'department',
-        'username': 'cn',
+        'username': 'uid',
     }
 
     _attrGroupMap = {
@@ -750,6 +809,8 @@ class IPALDAP(SimpleLDAP):
         'description': 'description',
         'name': 'cn',
     }
+
+    _simpleUserFilter = '(objectClass=person)(ipaUniqueID=*)'
 
     def __init__(self, *args, **kwargs):
         super(IPALDAP, self).__init__(*args, **kwargs)
@@ -772,8 +833,14 @@ class ADLDAP(LDAP):
         'name': 'name',
     }
 
-    def _determineBindUser(self, username, password, cacert=None):
-        return '%s@%s' % (username.split('@', 1)[0], self._domain)
+    def _determineBindUser(
+        self,
+        dnsDomain,
+        ldapServers,
+        saslUser,
+        bindPassword,
+    ):
+        return '%s@%s' % (saslUser.split('@', 1)[0], dnsDomain)
 
     def _determineNamespace(self, connection=None):
         _configurationNamingContext = self.search(
@@ -787,7 +854,7 @@ class ADLDAP(LDAP):
             'CN=Partitions,%s' % _configurationNamingContext,
             ldap.SCOPE_SUBTREE,
             '(&(objectClass=crossRef)(dnsRoot=%s)(nETBIOSName=*))' % (
-                self.getDomain(),
+                self._profile,
             ),
             ['nCName'],
             connection=connection,
@@ -804,26 +871,21 @@ class ADLDAP(LDAP):
 
     def getConfig(self):
         return (
-            "include = <ad.properties>\n"
-            "\n"
-            "self._vars.domain = {domain}\n"
-            "self._vars.user = {user}\n"
-            "self._vars.password = {password}\n"
-            "\n"
-            "pool.default.serverset.type = srvrecord\n"
-            "pool.default.serverset.srvrecord.domain = "
-            "${{global:vars.domain}}\n"
-            "pool.default.auth.simple.bindDN = ${{global:vars.user}}\n"
-            "pool.default.auth.simple.password = ${{global:vars.password}}\n"
-            "\n"
-            "pool.default.ssl.startTLS = {startTLS}\n"
-            "pool.default.ssl.truststore.file = ${{local:_basedir}}/ca.jks\n"
-            "pool.default.ssl.truststore.password = changeit"
+            'include = <ad.properties>\n'
+            '\n'
+            'self._vars.domain = {domain}\n'
+            'self._vars.user = {user}\n'
+            'self._vars.password = {password}\n'
+            '\n'
+            'pool.default.serverset.type = srvrecord\n'
+            'pool.default.serverset.srvrecord.domain = '
+            '${{global:vars.domain}}\n'
+            'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
+            'pool.default.auth.simple.password = ${{global:vars.password}}\n'
         ).format(
             user=self._bindUser,
             password=self._bindPassword,
-            domain=self._domain,
-            startTLS='true' if self._bindSSL else 'false',
+            domain=urlparse.urlparse(self._bindURI).netloc,
         )
 
 
@@ -837,7 +899,6 @@ class AAAProfile(Base):
         authnName,
         authzName,
         driver,
-        cacert=None,
         prefix='/',
     ):
         super(AAAProfile, self).__init__()
@@ -847,7 +908,6 @@ class AAAProfile(Base):
             'etc/ovirt-engine/extensions.d',
         )
         self._driver = driver
-        self._cacert = cacert
         self._vars = dict(
             authnName=authnName,
             authzName=authzName,
@@ -890,7 +950,8 @@ class AAAProfile(Base):
         if not os.path.exists(os.path.dirname(self._files['configFile'])):
             os.makedirs(os.path.dirname(self._files['configFile']))
 
-        if self._cacert is not None:
+        cacert = self._driver.getCACert()
+        if cacert:
             from ovirt_engine import java
             p = subprocess.Popen(
                 [
@@ -908,7 +969,7 @@ class AAAProfile(Base):
                         self._TMP_SUFFIX,
                     ),
                     '-storepass', 'changeit',
-                    '-file', self._cacert,
+                    '-file', cacert,
                     '-alias', 'myca',
                 ],
                 stdout=subprocess.PIPE,
@@ -926,20 +987,20 @@ class AAAProfile(Base):
             _writelog(
                 f,
                 (
-                    "ovirt.engine.extension.name = {authzName}\n"
+                    'ovirt.engine.extension.name = {authzName}\n'
 
-                    "ovirt.engine.extension.bindings.method = "
-                    "jbossmodule\n"
+                    'ovirt.engine.extension.bindings.method = '
+                    'jbossmodule\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.module = "
-                    "org.ovirt.engine-extensions.aaa.ldap\n"
+                    'ovirt.engine.extension.binding.jbossmodule.module = '
+                    'org.ovirt.engine-extensions.aaa.ldap\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.class = "
-                    "org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n"
-                    "ovirt.engine.extension.provides = "
+                    'ovirt.engine.extension.binding.jbossmodule.class = '
+                    'org.ovirt.engineextensions.aaa.ldap.AuthzExtension\n'
+                    'ovirt.engine.extension.provides = '
 
-                    "org.ovirt.engine.api.extensions.aaa.Authz\n"
-                    "config.profile.file.1 = {configFile}\n"
+                    'org.ovirt.engine.api.extensions.aaa.Authz\n'
+                    'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
         with open(
@@ -949,34 +1010,57 @@ class AAAProfile(Base):
             _writelog(
                 f,
                 (
-                    "ovirt.engine.extension.name = {authnName}\n"
+                    'ovirt.engine.extension.name = {authnName}\n'
 
-                    "ovirt.engine.extension.bindings.method = "
-                    "jbossmodule\n"
+                    'ovirt.engine.extension.bindings.method = '
+                    'jbossmodule\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.module = "
-                    "org.ovirt.engine-extensions.aaa.ldap\n"
+                    'ovirt.engine.extension.binding.jbossmodule.module = '
+                    'org.ovirt.engine-extensions.aaa.ldap\n'
 
-                    "ovirt.engine.extension.binding.jbossmodule.class = "
-                    "org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n"
+                    'ovirt.engine.extension.binding.jbossmodule.class = '
+                    'org.ovirt.engineextensions.aaa.ldap.AuthnExtension\n'
 
-                    "ovirt.engine.extension.provides = "
-                    "org.ovirt.engine.api.extensions.aaa.Authn\n"
+                    'ovirt.engine.extension.provides = '
+                    'org.ovirt.engine.api.extensions.aaa.Authn\n'
 
-                    "ovirt.engine.aaa.authn.profile.name = {profile}\n"
-                    "ovirt.engine.aaa.authn.authz.plugin = {authzName}\n"
-                    "config.profile.file.1 = {configFile}\n"
+                    'ovirt.engine.aaa.authn.profile.name = {profile}\n'
+                    'ovirt.engine.aaa.authn.authz.plugin = {authzName}\n'
+                    'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
         with open(
             '%s%s' % (self._files['configFile'], self._TMP_SUFFIX),
             'w'
         ) as f:
-            _writelog(f, self._driver.getConfig())
+            os.chmod(f.name, 0o660)
+            if os.getuid() == 0:
+                os.chown(
+                    f.name,
+                    pwd.getpwnam('ovirt').pw_uid,
+                    grp.getgrnam('ovirt').gr_gid,
+                )
+            _writelog(
+                f,
+                (
+                    '{common}'
+
+                    '\n'
+
+                    'pool.default.ssl.startTLS = {startTLS}\n'
+
+                    'pool.default.ssl.truststore.file = '
+                    '${{local:_basedir}}/ca.jks\n'
+
+                    'pool.default.ssl.truststore.password = changeit\n'
+                ).format(
+                    common=self._driver.getConfig(),
+                    startTLS='true' if cacert else 'false',
+                )
+            )
 
     def __enter__(self):
         self.checkExisting()
-        self.oldmask = os.umask(006)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -985,10 +1069,6 @@ class AAAProfile(Base):
             for f in self._files.values():
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
-                    if os.getuid() == 0:
-                        uid = pwd.getpwnam('ovirt').pw_uid
-                        gid = grp.getgrnam('ovirt').gr_gid
-                        os.chown(tmp_file, uid, gid)
                     os.rename(tmp_file, f)
 
         else:
@@ -997,8 +1077,6 @@ class AAAProfile(Base):
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
                     os.unlink(tmp_file)
-
-        os.umask(self.oldmask)
 
 
 class RollbackError(RuntimeError):
@@ -1015,7 +1093,7 @@ def parse_args():
     parser.add_argument(
         '--prefix',
         default='/',
-        help='for testing withing dev env',
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         '--debug',
@@ -1030,15 +1108,6 @@ def parse_args():
         help='write log into file',
     )
     parser.add_argument(
-        '--cacert',
-        metavar='FILE',
-        required=True,
-        help=(
-            'certificate chain to use for ssl, '
-            'or "NONE" if you do not want SSL'
-        ),
-    )
-    parser.add_argument(
         '--apply',
         default=False,
         action='store_true',
@@ -1051,37 +1120,61 @@ def parse_args():
         help='domain name to convert',
     )
     parser.add_argument(
+        '--cacert',
+        metavar='FILE',
+        required=True,
+        help=(
+            'certificate chain to use for ssl, '
+            'or "NONE" if you do not want SSL'
+        ),
+    )
+    parser.add_argument(
         '--authn-name',
         dest='authnName',
+        metavar='NAME',
         help='authn extension name, default profile name with -authn suffix',
     )
     parser.add_argument(
         '--authz-name',
         dest='authzName',
+        metavar='NAME',
         help='authz extension name, default profile name with -authz suffix',
     )
     parser.add_argument(
         '--profile',
         dest='profile',
+        metavar='NAME',
         help='new profile name, default old profile name with -new suffix',
     )
     parser.add_argument(
-        '--bind-dn',
-        dest='bindDN',
-        help='use this DN to bind, instead of kerberos user',
+        '--bind-user',
+        dest='bindUser',
+        metavar='DN',
+        help='use this user to bind, instead of performing autodetection',
     )
     parser.add_argument(
         '--bind-password',
         dest='bindPassword',
-        help='password for ldap bind user',
+        metavar='PASSWORD',
+        help="use this password instead of reusing sasl user's password",
     )
     parser.add_argument(
-        '--ldap-server',
-        dest='ldapServer',
-        help='use this instead of domain',
+        '--ldap-servers',
+        dest='ldapServers',
+        metavar='DNS',
+        help=(
+            'specify ldap servers explicitly instead of performing  '
+            'autodetection'
+        ),
     )
 
     args = parser.parse_args(sys.argv[1:])
+
+    if args.domain == args.profile:
+        raise RuntimeError(
+            'Profile cannot be the same as domain',
+        )
+
     if not args.authnName:
         args.authnName = '%s-authn' % args.domain
 
@@ -1178,12 +1271,15 @@ def convert(args, engineDir):
 
     with statement:
         aaadao = AAADAO(statement)
+
+        logger.info('Sanity checks')
         if aaadao.isDomainExists(args.authzName):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % (
                     args.authzName
                 )
             )
+
         logger.info('Loading options')
         domainEntry = VdcOptions(statement).getDomainEntry(args.domain)
         if not all([domainEntry.values()]):
@@ -1200,21 +1296,17 @@ def convert(args, engineDir):
             raise RuntimeError(
                 "Provider '%s' is not supported" % domainEntry['provider']
             )
-        ldapServer = args.domain
-        if args.ldapServer:
-            ldapServer = args.ldapServer
 
-        driver = driver(Kerberos(args.prefix), ldapServer)
-
-        logger.info(
-            "Connecting to ldap '%s' using '%s'",
-            ldapServer,
-            domainEntry['user'],
-        )
+        driver = driver(Kerberos(args.prefix), args.domain)
         driver.connect(
-            domainEntry['user'],
-            args.bindPassword if args.bindPassword else domainEntry['password'],
-            bindDN=args.bindDN,
+            dnsDomain=args.domain,
+            ldapServers=args.ldapServers,
+            saslUser=domainEntry['user'],
+            bindUser=args.bindUser,
+            bindPassword=(
+                args.bindPassword if args.bindPassword
+                else domainEntry['password']
+            ),
             cacert=args.cacert
         )
 
@@ -1222,7 +1314,6 @@ def convert(args, engineDir):
             profile=args.profile,
             authnName=args.authnName,
             authzName=args.authzName,
-            cacert=args.cacert,
             driver=driver,
             prefix=args.prefix,
         ) as aaaprofile:
@@ -1297,8 +1388,27 @@ def convert(args, engineDir):
             logger.info('Creating new extensions configuration')
             aaaprofile.save()
 
+            logger.info('Conversion completed')
+
+            if args.cacert is None:
+                logger.warning(
+                    'We strongly suggest to enable SSL, '
+                    'you can do this later, please refer to '
+                    'ovirt-engine-extension-aaa-ldap documentation'
+                )
+
+            if domainEntry['provider'] != 'ad':
+                logger.info(
+                    'Conversion was done using single server. '
+                    'Please refer to ovirt-engine-extension-aaa-ldap '
+                    'documentation if you would like to apply failover or '
+                    'other fallback policy.'
+                )
+
             if not args.apply:
-                raise RollbackError('Apply was not specified rolling back')
+                raise RollbackError(
+                    'Apply parameter was not specified rolling back'
+                )
 
 
 def main():
@@ -1345,7 +1455,7 @@ def main():
     return ret
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())
 
 
