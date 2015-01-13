@@ -222,14 +222,12 @@ class VdcOptions(object):
         ldapServers = self._getOptionForDomain(domain, 'LdapServers')
         if provider == 'activeDirectory':
             provider = 'ad'
-        if ldapServers:
-            ldapServers.split(',')
 
         return dict(
             user=self._getOptionForDomain(domain, 'AdUserName'),
             password=self._getOptionForDomain(domain, 'AdUserPassword'),
             provider=provider.lower() if provider else None,
-            ldapServers=ldapServers,
+            ldapServers=ldapServers.split(',') if ldapServers else None,
         )
 
 
@@ -877,9 +875,9 @@ class ADLDAP(LDAP):
         return (
             'include = <ad.properties>\n'
             '\n'
-            'self._vars.domain = {domain}\n'
-            'self._vars.user = {user}\n'
-            'self._vars.password = {password}\n'
+            'vars.domain = {domain}\n'
+            'vars.user = {user}\n'
+            'vars.password = {password}\n'
             '\n'
             'pool.default.serverset.type = srvrecord\n'
             'pool.default.serverset.srvrecord.domain = '
