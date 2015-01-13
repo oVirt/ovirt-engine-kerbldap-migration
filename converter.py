@@ -219,13 +219,17 @@ class VdcOptions(object):
 
     def getDomainEntry(self, domain):
         provider = self._getOptionForDomain(domain, 'LDAPProviderTypes')
+        ldapServers = self._getOptionForDomain(domain, 'LdapServers')
         if provider == 'activeDirectory':
             provider = 'ad'
+        if ldapServers:
+            ldapServers.split(',')
 
         return dict(
             user=self._getOptionForDomain(domain, 'AdUserName'),
             password=self._getOptionForDomain(domain, 'AdUserPassword'),
-            provider=provider.lower() if provider else None
+            provider=provider.lower() if provider else None,
+            ldapServers=ldapServers,
         )
 
 
@@ -1290,6 +1294,8 @@ def convert(args, engineDir):
         domainEntry['password'] = OptionDecrypt(prefix=args.prefix).decrypt(
             domainEntry['password'],
         )
+        if args.ldapServers:
+            domainEntry['ldapServers'] = args.ldapServers
 
         driver = DRIVERS.get(domainEntry['provider'])
         if driver is None:
@@ -1300,7 +1306,7 @@ def convert(args, engineDir):
         driver = driver(Kerberos(args.prefix), args.domain)
         driver.connect(
             dnsDomain=args.domain,
-            ldapServers=args.ldapServers,
+            ldapServers=domainEntry['ldapServers'],
             saslUser=domainEntry['user'],
             bindUser=args.bindUser,
             bindPassword=(
