@@ -114,7 +114,7 @@ def parse_args():
         args.authnName = '%s-authn' % args.domain
 
     if not args.authzName:
-        args.authzName = '%s-authz' % args.domain
+        args.authzName = args.domain
 
     if not args.profile:
         args.profile = '%s-new' % args.domain
