@@ -1,9 +1,11 @@
 import base64
+import glob
 import grp
 import logging
 import os
 import pwd
 import subprocess
+import sys
 import tempfile
 import urlparse
 import uuid
@@ -441,14 +443,14 @@ class AAADAO(object):
                     %(username)s
                 )
             """.format(
-                legacyNames='%s%s' % (
-                    ','.join(self._legacyAttrs.keys()),
-                    '' if not self._legacyAttrs.keys() else ','
-                ),
-                legacyValues='%s%s' % (
-                    ','.join(self._legacyAttrs.values()),
-                    '' if not self._legacyAttrs.values() else ','
-                )
+            legacyNames='%s%s' % (
+                ','.join(self._legacyAttrs.keys()),
+                '' if not self._legacyAttrs.keys() else ','
+            ),
+            legacyValues='%s%s' % (
+                ','.join(self._legacyAttrs.values()),
+                '' if not self._legacyAttrs.values() else ','
+            )
             ),
             args=user,
         )
@@ -474,6 +476,27 @@ class AAADAO(object):
             """,
             args=group,
         )
+
+    def updateColumn(self, table, column, value, oldValue):
+        self._statement.execute(
+            statement="""
+                update {table} set
+                    {column} = '{value}'
+                where
+                    {column} = '{oldValue}'
+            """.format(
+            table=table,
+            column=column,
+            value=value,
+            oldValue=oldValue,
+            ),
+        )
+
+    def updateUsers(self, column, value, oldValue):
+        self.updateColumn('users', column, value, oldValue)
+
+    def updateGroups(self, column, value, oldValue):
+        self.updateColumn('ad_groups', column, value, oldValue)
 
 
 class LDAP(Base):
@@ -880,6 +903,58 @@ class ADLDAP(LDAP):
         )
 
 
+class AAAParser(Base):
+
+    _TMP_SUFFIX = '.tmp'
+
+    def __init__(self, aaafile):
+        super(AAAParser, self).__init__()
+        self.aaafile = aaafile
+        self.aaafile_temp = '%s%s' % (aaafile, self._TMP_SUFFIX)
+        self.attributes = {}
+
+    def getValue(self, key):
+        return self.attributes[key]
+
+    def setValue(self, key, value):
+        self.attributes[key] = value
+
+    def read(self):
+        with open(self.aaafile) as f:
+            for line in f:
+                name, var = line.partition("=")[::2]
+                self.attributes[name.strip()] = var.strip()
+
+    def save(self):
+        def _writelog(f, s):
+            self.logger.debug("Write '%s'\n%s", f, s)
+            f.write(s)
+
+        with open(self.aaafile_temp, 'w') as f:
+            _writelog(
+                f,
+                '\n'.join([
+                    '%s = %s' % (k, v) for k, v in self.attributes.iteritems()
+                ]),
+            )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            self.logger.debug('Commit')
+            swap_file = '%s%s' % (self.aaafile_temp, self._TMP_SUFFIX)
+            if os.path.exists(self.aaafile_temp):
+                os.rename(self.aaafile_temp, swap_file)
+                os.rename(self.aaafile, self.aaafile_temp)
+                os.rename(swap_file, self.aaafile)
+        else:
+            self.logger.debug('Rollback')
+            if os.path.exists(self.aaafile_temp):
+                os.unlink(self.aaafile_temp)
+
+
 class AAAProfile(Base):
 
     _TMP_SUFFIX = '.tmp'
@@ -1068,3 +1143,104 @@ class AAAProfile(Base):
                 tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
                 if os.path.exists(tmp_file):
                     os.unlink(tmp_file)
+
+
+def setupLogger(log=None, debug=False):
+    logger = logging.getLogger(Base.LOG_PREFIX)
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    try:
+        h = logging.StreamHandler()
+        h.setLevel(logging.INFO)
+        h.setFormatter(
+            logging.Formatter(
+                fmt=(
+                    '[%(levelname)-7s] '
+                    '%(message)s'
+                ),
+            ),
+        )
+        logger.addHandler(h)
+
+        if log is not None:
+            h = logging.StreamHandler(open(log, 'w'))
+            h.setLevel(logging.DEBUG if debug else logging.INFO)
+            h.setFormatter(
+                logging.Formatter(
+                    fmt=(
+                        '%(asctime)-15s '
+                        '[%(levelname)-7s] '
+                        '%(name)s.%(funcName)s:%(lineno)d '
+                        '%(message)s'
+                    ),
+                ),
+            )
+            logger.addHandler(h)
+    except IOError:
+        logging.warning('Cannot initialize logging', exc_info=True)
+
+
+def getEngineDir(prefix='/'):
+    if prefix == '/':
+        engineDir = os.path.join(
+            prefix,
+            'usr',
+            'share',
+            'ovirt-engine',
+        )
+    else:
+        sys.path.insert(
+            0,
+            glob.glob(
+                os.path.join(
+                    prefix,
+                    'usr',
+                    'lib*',
+                    'python*',
+                    'site-packages',
+                )
+            )[0]
+        )
+        engineDir = os.path.join(
+            prefix,
+            'share',
+            'ovirt-engine',
+        )
+
+    return engineDir
+
+
+def getEngineStatement(engineDir, prefix='/'):
+    from ovirt_engine import configfile
+    engineConfig = configfile.ConfigFile(
+        files=[
+            os.path.join(
+                engineDir,
+                'services',
+                'ovirt-engine',
+                'ovirt-engine.conf',
+            ),
+            os.path.join(
+                prefix,
+                'etc',
+                'ovirt-engine',
+                'engine.conf',
+            ),
+        ],
+    )
+
+    statement = Statement()
+    statement.connect(
+        host=engineConfig.get('ENGINE_DB_HOST'),
+        port=engineConfig.get('ENGINE_DB_PORT'),
+        secured=engineConfig.getboolean('ENGINE_DB_SECURED'),
+        securedHostValidation=engineConfig.getboolean(
+            'ENGINE_DB_SECURED_VALIDATION'
+        ),
+        user=engineConfig.get('ENGINE_DB_USER'),
+        password=engineConfig.get('ENGINE_DB_PASSWORD'),
+        database=engineConfig.get('ENGINE_DB_DATABASE'),
+    )
+
+    return statement

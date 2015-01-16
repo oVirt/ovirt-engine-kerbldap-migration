@@ -1,15 +1,14 @@
 #!/usr/bin/python
 # Note you need cyrus-sasl-gssapi package
-import glob
 import logging
-import os
 import sys
 import uuid
 
 from ovirtexceptions import RollbackError
 from utils import (
-    Base, ADLDAP, IPALDAP, RHDSLDAP, OpenLDAP, Statement, AAADAO,
-    VdcOptions, OptionDecrypt, Kerberos, AAAProfile,
+    Base, ADLDAP, IPALDAP, RHDSLDAP, OpenLDAP, AAADAO, VdcOptions,
+    OptionDecrypt, Kerberos, AAAProfile, setupLogger, getEngineDir,
+    getEngineStatement,
 )
 
 try:
@@ -114,7 +113,7 @@ def parse_args():
         args.authnName = '%s-authn' % args.domain
 
     if not args.authzName:
-        args.authzName = args.domain
+        args.authzName = '%s-authz' % args.domain
 
     if not args.profile:
         args.profile = '%s-new' % args.domain
@@ -123,42 +122,6 @@ def parse_args():
         args.cacert = None
 
     return args
-
-
-def setupLogger(log=None, debug=False):
-    logger = logging.getLogger(Base.LOG_PREFIX)
-    logger.propagate = False
-    logger.setLevel(logging.DEBUG)
-
-    try:
-        h = logging.StreamHandler()
-        h.setLevel(logging.INFO)
-        h.setFormatter(
-            logging.Formatter(
-                fmt=(
-                    '[%(levelname)-7s] '
-                    '%(message)s'
-                ),
-            ),
-        )
-        logger.addHandler(h)
-
-        if log is not None:
-            h = logging.StreamHandler(open(log, 'w'))
-            h.setLevel(logging.DEBUG if debug else logging.INFO)
-            h.setFormatter(
-                logging.Formatter(
-                    fmt=(
-                        '%(asctime)-15s '
-                        '[%(levelname)-7s] '
-                        '%(name)s.%(funcName)s:%(lineno)d '
-                        '%(message)s'
-                    ),
-                ),
-            )
-            logger.addHandler(h)
-    except IOError:
-        logging.warning('Cannot initialize logging', exc_info=True)
 
 
 def convert(args, engineDir):
@@ -171,38 +134,7 @@ def convert(args, engineDir):
     }
 
     logger = logging.getLogger(Base.LOG_PREFIX)
-
-    from ovirt_engine import configfile
-    engineConfig = configfile.ConfigFile(
-        files=[
-            os.path.join(
-                engineDir,
-                'services',
-                'ovirt-engine',
-                'ovirt-engine.conf',
-            ),
-            os.path.join(
-                args.prefix,
-                'etc',
-                'ovirt-engine',
-                'engine.conf',
-            ),
-        ],
-    )
-
-    statement = Statement()
-    logger.info('Connecting to database')
-    statement.connect(
-        host=engineConfig.get('ENGINE_DB_HOST'),
-        port=engineConfig.get('ENGINE_DB_PORT'),
-        secured=engineConfig.getboolean('ENGINE_DB_SECURED'),
-        securedHostValidation=engineConfig.getboolean(
-            'ENGINE_DB_SECURED_VALIDATION'
-        ),
-        user=engineConfig.get('ENGINE_DB_USER'),
-        password=engineConfig.get('ENGINE_DB_PASSWORD'),
-        database=engineConfig.get('ENGINE_DB_DATABASE'),
-    )
+    statement = getEngineStatement(engineDir, args.prefix)
 
     with statement:
         aaadao = AAADAO(statement)
@@ -354,32 +286,7 @@ def main():
     logger = logging.getLogger(Base.LOG_PREFIX)
     logger.debug('Arguments: %s', args)
 
-    if args.prefix == '/':
-        engineDir = os.path.join(
-            args.prefix,
-            'usr',
-            'share',
-            'ovirt-engine',
-        )
-    else:
-        sys.path.insert(
-            0,
-            glob.glob(
-                os.path.join(
-                    args.prefix,
-                    'usr',
-                    'lib*',
-                    'python*',
-                    'site-packages',
-                )
-            )[0]
-        )
-        engineDir = os.path.join(
-            args.prefix,
-            'share',
-            'ovirt-engine',
-        )
-
+    engineDir = getEngineDir(args.prefix)
     ret = 1
     try:
         convert(args, engineDir)
