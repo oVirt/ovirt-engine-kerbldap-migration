@@ -16,7 +16,7 @@ except ImportError:
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            'Overrired current authz with new authz.',
+            'Overrired current authz with new authz.'
         ),
     )
     parser.add_argument(
