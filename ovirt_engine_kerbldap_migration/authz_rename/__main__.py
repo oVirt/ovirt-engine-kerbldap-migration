@@ -9,6 +9,7 @@ except ImportError:
     raise RuntimeError('Please install python-argparse')
 
 
+from ..common import config
 from ..common import utils
 
 
@@ -115,8 +116,18 @@ class RollbackError(RuntimeError):
 
 def parse_args():
     parser = argparse.ArgumentParser(
+        prog='%s-authz-rename' % config.PACKAGE_NAME,
         description=(
             'Overrired current authz with new authz.'
+        ),
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='%s-%s (%s)' % (
+            config.PACKAGE_NAME,
+            config.PACKAGE_VERSION,
+            config.LOCAL_VERSION
         ),
     )
     parser.add_argument(
