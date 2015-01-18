@@ -1,16 +1,117 @@
 #!/usr/bin/python
 import logging
+import os
 import sys
 
-from ovirtexceptions import RollbackError
-from utils import (
-    Base, AAADAO, AAAParser, setupLogger, getEngineDir, getEngineStatement,
-)
 
 try:
     import argparse
 except ImportError:
     raise RuntimeError('Please install python-argparse')
+
+
+from . import utils
+
+
+class AAADAO(utils.Base):
+
+    def __init__(self, statement):
+        self._statement = statement
+
+    def isAuthzExists(self, authz):
+        return len(
+            self._statement.execute(
+                statement="""
+                    select 1
+                    from users
+                    where domain = %(authz)s
+                    union
+                    select 1
+                    from ad_groups
+                    where domain = %(authz)s
+                """,
+                args=dict(
+                    authz=authz,
+                ),
+            ) != 0
+        )
+
+    def _updateColumn(self, table, column, value, oldValue):
+        self._statement.execute(
+            statement="""
+                update {table} set
+                    {column} = '{value}'
+                where
+                    {column} = '{oldValue}'
+            """.format(
+                table=table,
+                column=column,
+                value=value,
+                oldValue=oldValue,
+            ),
+        )
+
+    def updateUsers(self, column, value, oldValue):
+        self._updateColumn('users', column, value, oldValue)
+
+    def updateGroups(self, column, value, oldValue):
+        self._updateColumn('ad_groups', column, value, oldValue)
+
+
+class AAAParser(utils.Base):
+
+    _TMP_SUFFIX = '.tmp'
+
+    def __init__(self, aaafile):
+        super(AAAParser, self).__init__()
+        self.aaafile = aaafile
+        self.aaafile_temp = '%s%s' % (aaafile, self._TMP_SUFFIX)
+        self.attributes = {}
+
+    def getValue(self, key):
+        return self.attributes[key]
+
+    def setValue(self, key, value):
+        self.attributes[key] = value
+
+    def read(self):
+        with open(self.aaafile) as f:
+            for line in f:
+                name, var = line.partition("=")[::2]
+                self.attributes[name.strip()] = var.strip()
+
+    def save(self):
+        def _writelog(f, s):
+            self.logger.debug("Write '%s'\n%s", f, s)
+            f.write(s)
+
+        with open(self.aaafile_temp, 'w') as f:
+            _writelog(
+                f,
+                '\n'.join([
+                    '%s = %s' % (k, v) for k, v in self.attributes.iteritems()
+                ]),
+            )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            self.logger.debug('Commit')
+            swap_file = '%s%s' % (self.aaafile_temp, self._TMP_SUFFIX)
+            if os.path.exists(self.aaafile_temp):
+                os.rename(self.aaafile_temp, swap_file)
+                os.rename(self.aaafile, self.aaafile_temp)
+                os.rename(swap_file, self.aaafile)
+        else:
+            self.logger.debug('Rollback')
+            if os.path.exists(self.aaafile_temp):
+                os.unlink(self.aaafile_temp)
+
+
+class RollbackError(RuntimeError):
+    pass
 
 
 def parse_args():
@@ -62,18 +163,17 @@ def parse_args():
     return args
 
 
-def overrideAuthz(args):
-    logger = logging.getLogger(Base.LOG_PREFIX)
+def overrideAuthz(args, engine):
+    logger = logging.getLogger(utils.Base.LOG_PREFIX)
     logger.info('Connecting to database')
 
-    engineDir = getEngineDir(args.prefix)
-    statement = getEngineStatement(engineDir, args.prefix)
+    statement = engine.getStatement()
 
     with statement:
         aaadao = AAADAO(statement)
 
         logger.info('Sanity checks')
-        if aaadao.isDomainExists(args.newName):
+        if aaadao.isAuthzExists(args.newName):
             raise RuntimeError(
                 "User/Group from domain '%s' exists in database" % (
                     args.newName
@@ -95,13 +195,16 @@ def overrideAuthz(args):
 
 def main():
     args = parse_args()
-    setupLogger(log=args.log, debug=args.debug)
-    logger = logging.getLogger(Base.LOG_PREFIX)
+    utils.setupLogger(log=args.log, debug=args.debug)
+    logger = logging.getLogger(utils.Base.LOG_PREFIX)
     logger.debug('Arguments: %s', args)
+
+    engine = utils.Engine(prefix=args.prefix)
+    engine.setupEnvironment()
 
     ret = 1
     try:
-        overrideAuthz(args)
+        overrideAuthz(args=args, engine=engine)
         ret = 0
     except RollbackError as e:
         logger.warning('%s', e)
