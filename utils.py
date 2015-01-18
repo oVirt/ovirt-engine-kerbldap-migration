@@ -443,14 +443,14 @@ class AAADAO(object):
                     %(username)s
                 )
             """.format(
-            legacyNames='%s%s' % (
-                ','.join(self._legacyAttrs.keys()),
-                '' if not self._legacyAttrs.keys() else ','
-            ),
-            legacyValues='%s%s' % (
-                ','.join(self._legacyAttrs.values()),
-                '' if not self._legacyAttrs.values() else ','
-            )
+                legacyNames='%s%s' % (
+                    ','.join(self._legacyAttrs.keys()),
+                    '' if not self._legacyAttrs.keys() else ','
+                ),
+                legacyValues='%s%s' % (
+                    ','.join(self._legacyAttrs.values()),
+                    '' if not self._legacyAttrs.values() else ','
+                )
             ),
             args=user,
         )
@@ -485,10 +485,10 @@ class AAADAO(object):
                 where
                     {column} = '{oldValue}'
             """.format(
-            table=table,
-            column=column,
-            value=value,
-            oldValue=oldValue,
+                table=table,
+                column=column,
+                value=value,
+                oldValue=oldValue,
             ),
         )
 
