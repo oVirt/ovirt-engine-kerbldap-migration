@@ -335,25 +335,23 @@ class AAADAO(object):
         self._statement = statement
         self._fetchLegacyAttributes()
 
-    def isDomainExists(self, new_profile):
-        users = self._statement.execute(
-            statement="""
-                select 1 from users where domain = %(new_profile)s
-            """,
-            args=dict(
-                new_profile=new_profile,
-            ),
+    def isAuthzExists(self, authz):
+        return len(
+            self._statement.execute(
+                statement="""
+                    select 1
+                    from users
+                    where domain = %(authz)s
+                    union
+                    select 1
+                    from ad_groups
+                    where domain = %(authz)s
+                """,
+                args=dict(
+                    authz=authz,
+                ),
+            ) != 0
         )
-        groups = self._statement.execute(
-            statement="""
-                select 1 from ad_groups where domain = %(new_profile)s
-            """,
-            args=dict(
-                new_profile=new_profile,
-            ),
-        )
-
-        return any([groups, users])
 
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
