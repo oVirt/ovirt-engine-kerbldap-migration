@@ -1,4 +1,3 @@
-#!/usr/bin/python
 import logging
 import os
 import sys
@@ -10,7 +9,7 @@ except ImportError:
     raise RuntimeError('Please install python-argparse')
 
 
-from . import utils
+from ..common import utils
 
 
 class AAADAO(utils.Base):

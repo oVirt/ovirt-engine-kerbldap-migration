@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # Note you need cyrus-sasl-gssapi package
 import base64
 import grp
@@ -25,7 +24,7 @@ except ImportError:
     raise RuntimeError('Please install python-argparse')
 
 
-from . import utils
+from ..common import utils
 
 
 class AAADAO(utils.Base):
