@@ -1,26 +1,14 @@
+# Note you need cyrus-sasl-gssapi package
 import base64
-import glob
 import grp
 import logging
 import os
 import pwd
 import subprocess
 import sys
-import tempfile
 import urlparse
 import uuid
 
-from M2Crypto import RSA
-
-try:
-    import dns.resolver
-except ImportError:
-    raise RuntimeError('Please install python-dns')
-
-try:
-    import psycopg2
-except ImportError:
-    raise RuntimeError('Please install python-psycopg2')
 
 try:
     import ldap
@@ -30,281 +18,17 @@ except ImportError:
     raise RuntimeError('Please install python-ldap')
 
 
-class Base(object):
-    LOG_PREFIX = 'converter'
-
-    @property
-    def logger(self):
-        return self._logger
-
-    def __init__(self):
-        self._logger = logging.getLogger(
-            '%s.%s' % (
-                self.LOG_PREFIX,
-                self.__class__.__name__,
-            )
-        )
+try:
+    import argparse
+except ImportError:
+    raise RuntimeError('Please install python-argparse')
 
 
-class Statement(Base):
-
-    _connection = None
-
-    def __init__(self):
-        super(Statement, self).__init__()
-
-    def connect(
-        self,
-        host=None,
-        port=None,
-        secured=False,
-        securedHostValidation=True,
-        user=None,
-        password=None,
-        database=None,
-    ):
-        sslmode = 'allow'
-        if secured:
-            if securedHostValidation:
-                sslmode = 'verify-full'
-            else:
-                sslmode = 'require'
-
-        self.logger.debug(
-            (
-                'entry host=%s, port=%s, secured=%s, '
-                'securedHostValidation=%s, user=%s, database=%s'
-            ),
-            host,
-            port,
-            secured,
-            securedHostValidation,
-            user,
-            database,
-        )
-
-        #
-        # old psycopg2 does not know how to ignore
-        # uselss parameters
-        #
-        if not host:
-            connection = psycopg2.connect(
-                database=database,
-            )
-        else:
-            #
-            # port cast is required as old psycopg2
-            # does not support unicode strings for port.
-            # do not cast to int to avoid breaking usock.
-            #
-            connection = psycopg2.connect(
-                host=host,
-                port=str(port),
-                user=user,
-                password=password,
-                database=database,
-                sslmode=sslmode,
-            )
-
-        self._connection = connection
-
-    def execute(
-        self,
-        statement,
-        args=dict(),
-    ):
-        self.logger.debug('entry statement=%s %s', statement, args)
-
-        ret = []
-        cursor = None
-        try:
-            cursor = self._connection.cursor()
-            cursor.execute(
-                statement,
-                args,
-            )
-            if cursor.description is not None:
-                cols = [d[0] for d in cursor.description]
-                while True:
-                    entry = cursor.fetchone()
-                    if entry is None:
-                        break
-                    ret.append(dict(zip(cols, entry)))
-        finally:
-            if cursor is not None:
-                cursor.close()
-
-        return ret
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self.logger.debug('Commit')
-            self._connection.commit()
-        else:
-            self.logger.debug('Rollback')
-            self._connection.rollback()
-        self._connection.close()
+from ..common import config
+from ..common import utils
 
 
-class OptionDecrypt(Base):
-
-    def __init__(self, prefix='/'):
-        super(OptionDecrypt, self).__init__()
-        pkcs12 = os.path.join(prefix, 'etc/pki/ovirt-engine/keys/engine.p12')
-        password = 'mypass'
-        p = subprocess.Popen(
-            [
-                'openssl',
-                'pkcs12',
-                '-nocerts', '-nodes',
-                '-in', pkcs12,
-                '-passin', 'pass:%s' % password,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = p.communicate()
-
-        if p.wait() != 0:
-            self.logger.debug('openssl stderr: %s', stderr)
-            raise RuntimeError('Failed to execute openssl')
-
-        self._rsa = RSA.load_key_string(stdout)
-
-    def decrypt(self, s):
-        return self._rsa.private_decrypt(
-            base64.b64decode(s),
-            padding=RSA.pkcs1_padding,
-        )
-
-
-class VdcOptions(object):
-
-    def __init__(self, statement):
-        self._statement = statement
-
-    def _getOptionForDomain(self, domain, name):
-        ret = None
-
-        result = self._statement.execute(
-            statement="""
-                select option_value
-                from vdc_options
-                where option_name = %(name)s
-            """,
-            args=dict(
-                name=name,
-            ),
-        )
-        if result:
-            result = result[0]['option_value']
-            for val in result.split(','):
-                if val.startswith(domain + ':'):
-                    ret = val.split(':', 1)[1]
-                    break
-
-        return ret
-
-    def getDomainEntry(self, domain):
-        provider = self._getOptionForDomain(domain, 'LDAPProviderTypes')
-        ldapServers = self._getOptionForDomain(domain, 'LdapServers')
-        if provider == 'activeDirectory':
-            provider = 'ad'
-
-        return dict(
-            user=self._getOptionForDomain(domain, 'AdUserName'),
-            password=self._getOptionForDomain(domain, 'AdUserPassword'),
-            provider=provider.lower() if provider else None,
-            ldapServers=ldapServers.split(',') if ldapServers else None,
-        )
-
-
-class DNS(Base):
-
-    def __init__(self):
-        super(DNS, self).__init__()
-
-    def resolveSRVRecord(self, domain, protocol, service):
-        query = '_%s._%s.%s' % (service, protocol, domain)
-        response = dns.resolver.query(query, 'SRV')
-        self.logger.debug(
-            "Query result for srvrecord '%s': %s",
-            query,
-            response.response,
-        )
-        if not response:
-            raise RuntimeError("Cannot resolve domain '%s'" % domain)
-
-        ret = [
-            entry.target.to_text() for entry in sorted(
-                response,
-                key=lambda e: e.priority,
-                reverse=True,
-            )
-        ]
-        self.logger.debug('Return: %s', ret)
-        return ret
-
-
-class Kerberos(Base):
-
-    def __init__(self, prefix):
-        super(Kerberos, self).__init__()
-        self._prefix = prefix
-        self._cache = None
-        self._env = None
-
-    def kinit(self, user, password):
-        self.logger.debug('kinit')
-
-        fd, self._cache = tempfile.mkstemp()
-        os.close(fd)
-        self._env = os.environ.get('KRB5CCNAME')
-        os.environ['KRB5CCNAME'] = 'FILE:%s' % self._cache
-
-        env = os.environ.copy()
-        env['KRB5_CONFIG'] = os.path.join(
-            self._prefix,
-            'etc/ovirt-engine/krb5.conf',
-        )
-        p = subprocess.Popen(
-            [
-                'kinit',
-                user,
-            ],
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = p.communicate(input=password)
-        self.logger.debug('kinit stdout=%s, stderr=%s', stdout, stderr)
-        if p.wait() != 0:
-            raise RuntimeError(
-                'Cannot authenticate to kerberos for account %s' % user
-            )
-
-    def kdestroy(self):
-        self.logger.debug('kdestroy')
-        try:
-            p = subprocess.Popen(['kdestroy'])
-            if p.wait() != 0:
-                raise RuntimeError('Failed to execute kdestroy')
-        finally:
-            if self._env is None:
-                del os.environ['KRB5CCNAME']
-            else:
-                os.environ['KRB5CCNAME'] = self._env
-            if self._cache is not None:
-                if os.path.exists(self._cache):
-                    os.unlink(self._cache)
-                self._cache = None
-
-
-class AAADAO(object):
+class AAADAO(utils.Base):
 
     _legacyAttrs = {
         'active': 'True',
@@ -335,25 +59,23 @@ class AAADAO(object):
         self._statement = statement
         self._fetchLegacyAttributes()
 
-    def isDomainExists(self, new_profile):
-        users = self._statement.execute(
-            statement="""
-                select 1 from users where domain = %(new_profile)s
-            """,
-            args=dict(
-                new_profile=new_profile,
-            ),
+    def isAuthzExists(self, authz):
+        return len(
+            self._statement.execute(
+                statement="""
+                    select 1
+                    from users
+                    where domain = %(authz)s
+                    union
+                    select 1
+                    from ad_groups
+                    where domain = %(authz)s
+                """,
+                args=dict(
+                    authz=authz,
+                ),
+            ) != 0
         )
-        groups = self._statement.execute(
-            statement="""
-                select 1 from ad_groups where domain = %(new_profile)s
-            """,
-            args=dict(
-                new_profile=new_profile,
-            ),
-        )
-
-        return any([groups, users])
 
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
@@ -443,14 +165,14 @@ class AAADAO(object):
                     %(username)s
                 )
             """.format(
-            legacyNames='%s%s' % (
-                ','.join(self._legacyAttrs.keys()),
-                '' if not self._legacyAttrs.keys() else ','
-            ),
-            legacyValues='%s%s' % (
-                ','.join(self._legacyAttrs.values()),
-                '' if not self._legacyAttrs.values() else ','
-            )
+                legacyNames='%s%s' % (
+                    ','.join(self._legacyAttrs.keys()),
+                    '' if not self._legacyAttrs.keys() else ','
+                ),
+                legacyValues='%s%s' % (
+                    ','.join(self._legacyAttrs.values()),
+                    '' if not self._legacyAttrs.values() else ','
+                )
             ),
             args=user,
         )
@@ -477,29 +199,8 @@ class AAADAO(object):
             args=group,
         )
 
-    def updateColumn(self, table, column, value, oldValue):
-        self._statement.execute(
-            statement="""
-                update {table} set
-                    {column} = '{value}'
-                where
-                    {column} = '{oldValue}'
-            """.format(
-            table=table,
-            column=column,
-            value=value,
-            oldValue=oldValue,
-            ),
-        )
 
-    def updateUsers(self, column, value, oldValue):
-        self.updateColumn('users', column, value, oldValue)
-
-    def updateGroups(self, column, value, oldValue):
-        self.updateColumn('ad_groups', column, value, oldValue)
-
-
-class LDAP(Base):
+class LDAP(utils.Base):
 
     _attrUserMap = None
     _attrGroupMap = None
@@ -725,7 +426,7 @@ class SimpleLDAP(LDAP):
 
     def _determineBindURI(self, dnsDomain, ldapServers):
         if ldapServers is None:
-            ldapServers = DNS().resolveSRVRecord(
+            ldapServers = utils.DNS().resolveSRVRecord(
                 domain=dnsDomain,
                 protocol='tcp',
                 service='ldap',
@@ -903,59 +604,7 @@ class ADLDAP(LDAP):
         )
 
 
-class AAAParser(Base):
-
-    _TMP_SUFFIX = '.tmp'
-
-    def __init__(self, aaafile):
-        super(AAAParser, self).__init__()
-        self.aaafile = aaafile
-        self.aaafile_temp = '%s%s' % (aaafile, self._TMP_SUFFIX)
-        self.attributes = {}
-
-    def getValue(self, key):
-        return self.attributes[key]
-
-    def setValue(self, key, value):
-        self.attributes[key] = value
-
-    def read(self):
-        with open(self.aaafile) as f:
-            for line in f:
-                name, var = line.partition("=")[::2]
-                self.attributes[name.strip()] = var.strip()
-
-    def save(self):
-        def _writelog(f, s):
-            self.logger.debug("Write '%s'\n%s", f, s)
-            f.write(s)
-
-        with open(self.aaafile_temp, 'w') as f:
-            _writelog(
-                f,
-                '\n'.join([
-                    '%s = %s' % (k, v) for k, v in self.attributes.iteritems()
-                ]),
-            )
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self.logger.debug('Commit')
-            swap_file = '%s%s' % (self.aaafile_temp, self._TMP_SUFFIX)
-            if os.path.exists(self.aaafile_temp):
-                os.rename(self.aaafile_temp, swap_file)
-                os.rename(self.aaafile, self.aaafile_temp)
-                os.rename(swap_file, self.aaafile)
-        else:
-            self.logger.debug('Rollback')
-            if os.path.exists(self.aaafile_temp):
-                os.unlink(self.aaafile_temp)
-
-
-class AAAProfile(Base):
+class AAAProfile(utils.Base):
 
     _TMP_SUFFIX = '.tmp'
 
@@ -1145,102 +794,307 @@ class AAAProfile(Base):
                     os.unlink(tmp_file)
 
 
-def setupLogger(log=None, debug=False):
-    logger = logging.getLogger(Base.LOG_PREFIX)
-    logger.propagate = False
-    logger.setLevel(logging.DEBUG)
-
-    try:
-        h = logging.StreamHandler()
-        h.setLevel(logging.INFO)
-        h.setFormatter(
-            logging.Formatter(
-                fmt=(
-                    '[%(levelname)-7s] '
-                    '%(message)s'
-                ),
-            ),
-        )
-        logger.addHandler(h)
-
-        if log is not None:
-            h = logging.StreamHandler(open(log, 'w'))
-            h.setLevel(logging.DEBUG if debug else logging.INFO)
-            h.setFormatter(
-                logging.Formatter(
-                    fmt=(
-                        '%(asctime)-15s '
-                        '[%(levelname)-7s] '
-                        '%(name)s.%(funcName)s:%(lineno)d '
-                        '%(message)s'
-                    ),
-                ),
-            )
-            logger.addHandler(h)
-    except IOError:
-        logging.warning('Cannot initialize logging', exc_info=True)
+class RollbackError(RuntimeError):
+    pass
 
 
-def getEngineDir(prefix='/'):
-    if prefix == '/':
-        engineDir = os.path.join(
-            prefix,
-            'usr',
-            'share',
-            'ovirt-engine',
-        )
-    else:
-        sys.path.insert(
-            0,
-            glob.glob(
-                os.path.join(
-                    prefix,
-                    'usr',
-                    'lib*',
-                    'python*',
-                    'site-packages',
-                )
-            )[0]
-        )
-        engineDir = os.path.join(
-            prefix,
-            'share',
-            'ovirt-engine',
-        )
-
-    return engineDir
-
-
-def getEngineStatement(engineDir, prefix='/'):
-    from ovirt_engine import configfile
-    engineConfig = configfile.ConfigFile(
-        files=[
-            os.path.join(
-                engineDir,
-                'services',
-                'ovirt-engine',
-                'ovirt-engine.conf',
-            ),
-            os.path.join(
-                prefix,
-                'etc',
-                'ovirt-engine',
-                'engine.conf',
-            ),
-        ],
-    )
-
-    statement = Statement()
-    statement.connect(
-        host=engineConfig.get('ENGINE_DB_HOST'),
-        port=engineConfig.get('ENGINE_DB_PORT'),
-        secured=engineConfig.getboolean('ENGINE_DB_SECURED'),
-        securedHostValidation=engineConfig.getboolean(
-            'ENGINE_DB_SECURED_VALIDATION'
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog='%s-tool' % config.PACKAGE_NAME,
+        description=(
+            'Convert legacy users/groups with permissions '
+            'into new extension api.'
         ),
-        user=engineConfig.get('ENGINE_DB_USER'),
-        password=engineConfig.get('ENGINE_DB_PASSWORD'),
-        database=engineConfig.get('ENGINE_DB_DATABASE'),
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='%s-%s (%s)' % (
+            config.PACKAGE_NAME,
+            config.PACKAGE_VERSION,
+            config.LOCAL_VERSION
+        ),
+    )
+    parser.add_argument(
+        '--prefix',
+        default='/',
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        '--debug',
+        default=False,
+        action='store_true',
+        help='enable debug log',
+    )
+    parser.add_argument(
+        '--log',
+        metavar='FILE',
+        default=None,
+        help='write log into file',
+    )
+    parser.add_argument(
+        '--apply',
+        default=False,
+        action='store_true',
+        help='apply settings'
+    )
+    parser.add_argument(
+        '--domain',
+        dest='domain',
+        required=True,
+        help='domain name to convert',
+    )
+    parser.add_argument(
+        '--cacert',
+        metavar='FILE',
+        required=True,
+        help=(
+            'certificate chain to use for ssl, '
+            'or "NONE" if you do not want SSL'
+        ),
+    )
+    parser.add_argument(
+        '--authn-name',
+        dest='authnName',
+        metavar='NAME',
+        help='authn extension name, default profile name with -authn suffix',
+    )
+    parser.add_argument(
+        '--authz-name',
+        dest='authzName',
+        metavar='NAME',
+        help='authz extension name, default profile name with -authz suffix',
+    )
+    parser.add_argument(
+        '--profile',
+        dest='profile',
+        metavar='NAME',
+        help='new profile name, default old profile name with -new suffix',
+    )
+    parser.add_argument(
+        '--bind-user',
+        dest='bindUser',
+        metavar='DN',
+        help='use this user to bind, instead of performing autodetection',
+    )
+    parser.add_argument(
+        '--bind-password',
+        dest='bindPassword',
+        metavar='PASSWORD',
+        help="use this password instead of reusing sasl user's password",
+    )
+    parser.add_argument(
+        '--ldap-servers',
+        dest='ldapServers',
+        metavar='DNS',
+        help=(
+            'specify ldap servers explicitly instead of performing  '
+            'autodetection'
+        ),
     )
 
-    return statement
+    args = parser.parse_args(sys.argv[1:])
+
+    if args.domain == args.profile:
+        raise RuntimeError(
+            'Profile cannot be the same as domain',
+        )
+
+    if not args.authnName:
+        args.authnName = '%s-authn' % args.domain
+
+    if not args.authzName:
+        args.authzName = '%s-authz' % args.domain
+
+    if not args.profile:
+        args.profile = '%s-new' % args.domain
+
+    if args.cacert == 'NONE':
+        args.cacert = None
+
+    return args
+
+
+def convert(args, engine):
+
+    DRIVERS = {
+        'ad': ADLDAP,
+        'ipa': IPALDAP,
+        'rhds': RHDSLDAP,
+        'openldap': OpenLDAP,
+    }
+
+    logger = logging.getLogger(utils.Base.LOG_PREFIX)
+    statement = engine.getStatement()
+
+    with statement:
+        aaadao = AAADAO(statement)
+
+        logger.info('Sanity checks')
+        if aaadao.isAuthzExists(args.authzName):
+            raise RuntimeError(
+                "User/Group from domain '%s' exists in database" % (
+                    args.authzName
+                )
+            )
+
+        logger.info('Loading options')
+        domainEntry = utils.VdcOptions(statement).getDomainEntry(args.domain)
+        if not all([domainEntry.values()]):
+            raise RuntimeError(
+                "Domain '%s' does not exists. Exiting." % args.domain
+            )
+
+        domainEntry['password'] = utils.OptionDecrypt(
+            prefix=engine.prefix
+        ).decrypt(
+            domainEntry['password'],
+        )
+        if args.ldapServers:
+            domainEntry['ldapServers'] = args.ldapServers
+
+        driver = DRIVERS.get(domainEntry['provider'])
+        if driver is None:
+            raise RuntimeError(
+                "Provider '%s' is not supported" % domainEntry['provider']
+            )
+
+        driver = driver(utils.Kerberos(engine.prefix), args.domain)
+        driver.connect(
+            dnsDomain=args.domain,
+            ldapServers=domainEntry['ldapServers'],
+            saslUser=domainEntry['user'],
+            bindUser=args.bindUser,
+            bindPassword=(
+                args.bindPassword if args.bindPassword
+                else domainEntry['password']
+            ),
+            cacert=args.cacert
+        )
+
+        with AAAProfile(
+            profile=args.profile,
+            authnName=args.authnName,
+            authzName=args.authzName,
+            driver=driver,
+            prefix=engine.prefix,
+        ) as aaaprofile:
+            logger.info('Converting users')
+            users = {}
+            for legacyUser in aaadao.fetchLegacyUsers(args.domain):
+                logger.debug("Converting user '%s'", legacyUser['username'])
+                e = driver.getUser(entryId=legacyUser['external_id'])
+                if e is None:
+                    logger.warning(
+                        (
+                            "User '%s' id '%s' could not be found, "
+                            "probably deleted from directory"
+                        ),
+                        legacyUser['external_id'],
+                        legacyUser['username'],
+                    )
+                else:
+                    e.update({
+                        'domain': args.authzName,
+                        'last_admin_check_status': legacyUser[
+                            'last_admin_check_status'
+                        ],
+                    })
+                    users[legacyUser['user_id']] = e
+
+            logger.info('Converting groups')
+            groups = {}
+            for legacyGroup in aaadao.fetchLegacyGroups(args.domain):
+                logger.debug("Converting group '%s'", legacyGroup['name'])
+                e = driver.getGroup(entryId=legacyGroup['external_id'])
+                if e is None:
+                    logger.warning(
+                        (
+                            "Group '%s' id '%s' could not be found, "
+                            "probably deleted from directory"
+                        ),
+                        legacyGroup['external_id'],
+                        legacyGroup['name'],
+                    )
+                else:
+                    e['domain'] = args.authzName
+                    groups[legacyGroup['id']] = e
+
+            logger.info('Converting permissions')
+            permissions = []
+            for perm in aaadao.fetchAllPermissions():
+                group = groups.get(perm['ad_element_id'])
+                if group is not None:
+                    perm['id'] = str(uuid.uuid4())
+                    perm['ad_element_id'] = group['id']
+                    permissions.append(perm)
+                else:
+                    user = users.get(perm['ad_element_id'])
+                    if user is not None:
+                        perm['id'] = str(uuid.uuid4())
+                        perm['ad_element_id'] = user['user_id']
+                        permissions.append(perm)
+
+            logger.info('Adding new users')
+            for user in users.values():
+                aaadao.insertUser(user)
+
+            logger.info('Adding new groups')
+            for group in groups.values():
+                aaadao.insertGroup(group)
+
+            logger.info('Adding new permissions')
+            for permission in permissions:
+                aaadao.insertPermission(permission)
+
+            logger.info('Creating new extensions configuration')
+            aaaprofile.save()
+
+            logger.info('Conversion completed')
+
+            if args.cacert is None:
+                logger.warning(
+                    'We strongly suggest to enable SSL, '
+                    'you can do this later, please refer to '
+                    'ovirt-engine-extension-aaa-ldap documentation'
+                )
+
+            if domainEntry['provider'] != 'ad':
+                logger.info(
+                    'Conversion was done using single server. '
+                    'Please refer to ovirt-engine-extension-aaa-ldap '
+                    'documentation if you would like to apply failover or '
+                    'other fallback policy.'
+                )
+
+            if not args.apply:
+                raise RollbackError(
+                    'Apply parameter was not specified rolling back'
+                )
+
+
+def main():
+    args = parse_args()
+    utils.setupLogger(log=args.log, debug=args.debug)
+    logger = logging.getLogger(utils.Base.LOG_PREFIX)
+    logger.debug('Arguments: %s', args)
+
+    engine = utils.Engine(prefix=args.prefix)
+    engine.setupEnvironment()
+    ret = 1
+    try:
+        convert(args=args, engine=engine)
+        ret = 0
+    except RollbackError as e:
+        logger.warning('%s', e)
+    except Exception as e:
+        logger.error('Conversion failed: %s', e)
+        logger.debug('Exception', exc_info=True)
+    return ret
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+
+
+# vim: expandtab tabstop=4 shiftwidth=4

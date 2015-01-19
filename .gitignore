@@ -1,54 +1,29 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
+ABOUT-NLS
+Makefile
+Makefile.in
+aclocal.m4
+autom4te.cache
+compile
+config.guess
+config.log
+config.rpath
+config.status
+config.sub
+configure
+install-sh
+ln-sr
+missing
+py-compile
 
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
+*.pyc
+*.pyo
 *.spec
+*.swp
+*.tmp
+*~
+__pycache__
+tmp.*
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.cache
-nosetests.xml
-coverage.xml
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
+ovirt-engine-kerbldap-migration-authz-rename
+ovirt-engine-kerbldap-migration-tool
+ovirt_engine_kerbldap_migration/common/config.py

@@ -1,3 +1,0 @@
-
-class RollbackError(RuntimeError):
-    pass

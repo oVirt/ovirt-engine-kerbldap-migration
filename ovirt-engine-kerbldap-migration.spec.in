@@ -1,0 +1,50 @@
+%global		package_version @PACKAGE_VERSION@
+%global		package_maven_version @PACKAGE_MAVEN_VERSION@
+
+Summary:	ovirt-engine legacy kerbldap migration tools
+Name:		@PACKAGE_NAME@
+Version:	@PACKAGE_RPM_VERSION@
+Release:	@PACKAGE_RPM_RELEASE@%{?release_suffix}%{?dist}
+License:	GPLv3
+URL:		http://www.ovirt.org
+Source:		http://resources.ovirt.org/pub/src/%{name}/%{name}-%{package_version}.tar.gz
+
+BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+BuildArch:	noarch
+
+BuildRequires:	python2-devel
+
+Requires:	m2crypto
+Requires:	python
+Requires:	python-argparse
+Requires:	python-dns
+Requires:	python-ldap
+Requires:	python-psycopg2
+
+%description
+ovirt-engine legacy kerbldap migration tools
+
+%prep
+%setup -q -n %{name}-%{package_version}
+
+%build
+%configure \
+	--disable-python-syntax-check \
+	--with-local-version="%{name}-%{version}-%{release}" \
+	%{?conf}
+make %{?_smp_mflags}
+
+%install
+rm -rf "%{buildroot}"
+make %{?_smp_mflags} install DESTDIR="%{buildroot}"
+
+%files
+%{_bindir}/%{name}-authz-rename
+%{_bindir}/%{name}-spawn.sh
+%{_bindir}/%{name}-tool
+%{_docdir}/%{name}/README.md
+%{python_sitelib}/ovirt_engine_kerbldap_migration/
+
+%changelog
+* Sun Jan 18 2015 Alon Bar-Lev <alonbl@redhat.com> - 1.0.0-1
+- Initial add.
