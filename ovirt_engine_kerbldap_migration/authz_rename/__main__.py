@@ -40,12 +40,14 @@ class AAADAO(utils.Base):
         self._statement.execute(
             statement="""
                 update {table} set
-                    {column} = '{value}'
+                    {column} = %(value)s
                 where
-                    {column} = '{oldValue}'
+                    {column} = %(oldValue)s
             """.format(
                 table=table,
                 column=column,
+            ),
+            args=dict(
                 value=value,
                 oldValue=oldValue,
             ),
@@ -66,19 +68,10 @@ class AAAParser(utils.Base):
         super(AAAParser, self).__init__()
         self.aaafile = aaafile
         self.aaafile_temp = '%s%s' % (aaafile, self._TMP_SUFFIX)
-        self.attributes = {}
-
-    def getValue(self, key):
-        return self.attributes[key]
-
-    def setValue(self, key, value):
-        self.attributes[key] = value
 
     def read(self):
         with open(self.aaafile) as f:
-            for line in f:
-                name, var = line.partition("=")[::2]
-                self.attributes[name.strip()] = var.strip()
+            self.content = f.read()
 
     def save(self):
         def _writelog(f, s):
@@ -86,12 +79,7 @@ class AAAParser(utils.Base):
             f.write(s)
 
         with open(self.aaafile_temp, 'w') as f:
-            _writelog(
-                f,
-                '\n'.join([
-                    '%s = %s' % (k, v) for k, v in self.attributes.iteritems()
-                ]),
-            )
+            _writelog(f, self.content)
 
     def __enter__(self):
         return self
@@ -157,8 +145,8 @@ def parse_args():
         '--authz-name',
         dest='authzName',
         required=True,
-        metavar='FILE',
-        help='path to authz extension configuration',
+        metavar='NAME',
+        help='name of authz you want to rename',
     )
     parser.add_argument(
         '--new-name',
@@ -190,17 +178,38 @@ def overrideAuthz(args, engine):
                 )
             )
 
-        logger.info('Updating users/groups from to %s' % (args.newName))
-        with AAAParser(args.authzName) as authz:
-            authz.read()
-            authzName = authz.getValue('ovirt.engine.extension.name')
+        logger.info(
+            'Updating users/groups from %s to %s', args.authzName, args.newName
+        )
 
-            # Update all users/groups with authzName to newName
-            aaadao.updateUsers('domain', authzName, args.newName)
-            aaadao.updateGroups('domain', authzName, args.newName)
+        updated = False
+        for dname, dirs, files in os.walk('/etc/ovirt-engine/extensions.d/'):
+            for fname in files:
+                fpath = os.path.join(dname, fname)
+                with AAAParser(fpath) as aaafile:
+                    aaafile.read()
 
-            authz.setValue('ovirt.engine.extension.name', args.newName)
-            authz.save()
+                    if aaafile.content.find(args.authzName) > 0:
+                        aaadao.updateUsers(
+                            'domain',
+                            args.authzName,
+                            args.newName
+                        )
+                        aaadao.updateGroups(
+                            'domain',
+                            args.authzName,
+                            args.newName
+                        )
+                        aaafile.content = aaafile.content.replace(
+                            args.authzName,
+                            args.newName
+                        )
+                        aaafile.save()
+                        updated = True
+
+        if not updated:
+            raise RuntimeError('Authz %s was not found.' % args.authzName)
+        logger.info('Authz was successfully renamed to %s', args.newName)
 
 
 def main():
