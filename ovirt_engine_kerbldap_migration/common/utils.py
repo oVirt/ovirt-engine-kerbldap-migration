@@ -297,6 +297,64 @@ class Kerberos(Base):
                 self._cache = None
 
 
+class FileTransaction(Base):
+
+    _files = []
+
+    def __init__(self):
+        super(FileTransaction, self).__init__()
+
+    def _copyFile(self, src, dest):
+        shutil.copyfile(src, dest)
+        shutil.copystat(src, dest)
+        srcStat = os.stat(src)
+        os.chown(
+            dest,
+            srcStat.st_uid,
+            srcStat.st_gid
+        )
+
+    def getFileName(self, name, forceNew=False):
+        if forceNew and os.path.exists(name):
+            raise RuntimeError('File %s already exists' % name)
+
+        if os.path.exists(name):
+            self._copyFile(
+                name,
+                '%s.%s' % (
+                    name,
+                    datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+                )
+            )
+
+        fd, tmpname = tempfile.mkstemp(
+            suffix='.tmp',
+            prefix='%s.' % os.path.basename(name),
+            dir=os.path.dirname(name),
+        )
+        os.close(fd)
+
+        self.logger.debug("Temp name for '%s' is '%s'", name, tmpname)
+        self._files.append((tmpname, name))
+
+        return tmpname
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            self.logger.debug('Commit %s', self._files)
+            for tmpname, name in self._files:
+                if os.path.exists(tmpname):
+                    os.rename(tmpname, name)
+        else:
+            self.logger.debug('Rollback')
+            for tmpname, name in self._files:
+                if os.path.exists(tmpname):
+                    os.unlink(tmpname)
+
+
 class Engine(Base):
 
     @property
@@ -408,64 +466,6 @@ def setupLogger(log=None, debug=False):
             logger.addHandler(h)
     except IOError:
         logging.warning('Cannot initialize logging', exc_info=True)
-
-
-class FileTransaction(Base):
-
-    _files = []
-
-    def __init__(self):
-        super(FileTransaction, self).__init__()
-
-    def _copyFile(self, src, dest):
-        shutil.copyfile(src, dest)
-        shutil.copystat(src, dest)
-        srcStat = os.stat(src)
-        os.chown(
-            dest,
-            srcStat.st_uid,
-            srcStat.st_gid
-        )
-
-    def getFileName(self, name, forceNew=False):
-        if forceNew and os.path.exists(name):
-            raise RuntimeError('File %s already exists' % name)
-
-        if os.path.exists(name):
-            self._copyFile(
-                name,
-                '%s.%s' % (
-                    name,
-                    datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-                )
-            )
-
-        fd, tmpname = tempfile.mkstemp(
-            suffix='.tmp',
-            prefix='%s.' % os.path.basename(name),
-            dir=os.path.dirname(name),
-        )
-        os.close(fd)
-
-        self.logger.debug("Temp name for '%s' is '%s'", name, tmpname)
-        self._files.append((tmpname, name))
-
-        return tmpname
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self.logger.debug('Commit %s', self._files)
-            for tmpname, name in self._files:
-                if os.path.exists(tmpname):
-                    os.rename(tmpname, name)
-        else:
-            self.logger.debug('Rollback')
-            for tmpname, name in self._files:
-                if os.path.exists(tmpname):
-                    os.unlink(tmpname)
 
 
 # vim: expandtab tabstop=4 shiftwidth=4
