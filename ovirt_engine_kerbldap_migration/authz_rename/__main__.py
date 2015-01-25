@@ -144,7 +144,12 @@ def overrideAuthz(args, engine):
         )
 
         updated = False
-        for dname, dirs, files in os.walk('/etc/ovirt-engine/extensions.d/'):
+        for dname, dirs, files in os.walk(
+            os.path.join(
+                engine.prefix,
+                'etc/ovirt-engine/extensions.d',
+            )
+        ):
             for fname in files:
                 fpath = os.path.join(dname, fname)
                 with utils.FileTransaction() as aaafile:
