@@ -19,22 +19,20 @@ class AAADAO(utils.Base):
         self._statement = statement
 
     def isAuthzExists(self, authz):
-        return len(
-            self._statement.execute(
-                statement="""
-                    select 1
-                    from users
-                    where domain = %(authz)s
-                    union
-                    select 1
-                    from ad_groups
-                    where domain = %(authz)s
-                """,
-                args=dict(
-                    authz=authz,
-                ),
-            ) != 0
-        )
+        return self._statement.execute(
+            statement="""
+                select 1
+                from users
+                where domain = %(authz)s
+                union
+                select 1
+                from ad_groups
+                where domain = %(authz)s
+            """,
+            args=dict(
+                authz=authz,
+            ),
+        ) == 0
 
     def _updateColumn(self, table, column, value, oldValue):
         self._statement.execute(
@@ -58,44 +56,6 @@ class AAADAO(utils.Base):
 
     def updateGroups(self, column, value, oldValue):
         self._updateColumn('ad_groups', column, value, oldValue)
-
-
-class AAAParser(utils.Base):
-
-    _TMP_SUFFIX = '.tmp'
-
-    def __init__(self, aaafile):
-        super(AAAParser, self).__init__()
-        self.aaafile = aaafile
-        self.aaafile_temp = '%s%s' % (aaafile, self._TMP_SUFFIX)
-
-    def read(self):
-        with open(self.aaafile) as f:
-            self.content = f.read()
-
-    def save(self):
-        def _writelog(f, s):
-            self.logger.debug("Write '%s'\n%s", f, s)
-            f.write(s)
-
-        with open(self.aaafile_temp, 'w') as f:
-            _writelog(f, self.content)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self.logger.debug('Commit')
-            swap_file = '%s%s' % (self.aaafile_temp, self._TMP_SUFFIX)
-            if os.path.exists(self.aaafile_temp):
-                os.rename(self.aaafile_temp, swap_file)
-                os.rename(self.aaafile, self.aaafile_temp)
-                os.rename(swap_file, self.aaafile)
-        else:
-            self.logger.debug('Rollback')
-            if os.path.exists(self.aaafile_temp):
-                os.unlink(self.aaafile_temp)
 
 
 class RollbackError(RuntimeError):
@@ -186,10 +146,14 @@ def overrideAuthz(args, engine):
         for dname, dirs, files in os.walk('/etc/ovirt-engine/extensions.d/'):
             for fname in files:
                 fpath = os.path.join(dname, fname)
-                with AAAParser(fpath) as aaafile:
-                    aaafile.read()
-
-                    if aaafile.content.find(args.authzName) > 0:
+                with utils.FileTransaction() as aaafile:
+                    with open(fpath, 'r') as f:
+                        content = f.read()
+                    if content.find(args.authzName) > 0:
+                        content = content.replace(args.authzName, args.newName)
+                        with aaafile.getFileName(fpath) as fd:
+                            fd.write(content)
+                        aaafile._files[fpath] = fpath
                         aaadao.updateUsers(
                             'domain',
                             args.authzName,
@@ -200,11 +164,6 @@ def overrideAuthz(args, engine):
                             args.authzName,
                             args.newName
                         )
-                        aaafile.content = aaafile.content.replace(
-                            args.authzName,
-                            args.newName
-                        )
-                        aaafile.save()
                         updated = True
 
         if not updated:

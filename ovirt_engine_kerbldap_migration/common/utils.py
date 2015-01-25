@@ -408,4 +408,46 @@ def setupLogger(log=None, debug=False):
         logging.warning('Cannot initialize logging', exc_info=True)
 
 
+class FileTransaction(Base):
+
+    _BACKUP_SUFFIX = '.bkp'
+    _TMP_SUFFIX = '.tmp'
+    _files = {}
+
+    def __init__(self):
+        super(FileTransaction, self).__init__()
+
+    def _copyFile(self, src, dest):
+        with open(src, 'r') as fd_src:
+            with open(dest, 'w') as fd_dest:
+                fd_dest.write(fd_src.read())
+
+    def getFileName(self, name, forceNew=False):
+        if forceNew and os.path.exists(name):
+            raise RuntimeError('File %s already exists' % name)
+
+        if os.path.exists(name):
+            self._copyFile(name, '%s%s' % (name, self._BACKUP_SUFFIX))
+
+        return open('%s%s' % (name, self._TMP_SUFFIX), 'w')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            self.logger.debug('Commit')
+            self.logger.debug(self._files)
+            for k, f in self._files.iteritems():
+                temp_file = '%s%s' % (f, self._TMP_SUFFIX)
+                self.logger.debug(temp_file)
+                if os.path.exists(temp_file):
+                    os.rename(temp_file, f)
+        else:
+            self.logger.debug('Rollback')
+            for f in self._files:
+                if os.path.exists(f):
+                    os.unlink(f)
+
+
 # vim: expandtab tabstop=4 shiftwidth=4

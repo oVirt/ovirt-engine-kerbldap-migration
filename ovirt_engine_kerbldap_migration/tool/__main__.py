@@ -60,22 +60,20 @@ class AAADAO(utils.Base):
         self._fetchLegacyAttributes()
 
     def isAuthzExists(self, authz):
-        return len(
-            self._statement.execute(
-                statement="""
-                    select 1
-                    from users
-                    where domain = %(authz)s
-                    union
-                    select 1
-                    from ad_groups
-                    where domain = %(authz)s
-                """,
-                args=dict(
-                    authz=authz,
-                ),
-            ) != 0
-        )
+        return self._statement.execute(
+            statement="""
+                select 1
+                from users
+                where domain = %(authz)s
+                union
+                select 1
+                from ad_groups
+                where domain = %(authz)s
+            """,
+            args=dict(
+                authz=authz,
+            ),
+        ) == 0
 
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
@@ -604,9 +602,7 @@ class ADLDAP(LDAP):
         )
 
 
-class AAAProfile(utils.Base):
-
-    _TMP_SUFFIX = '.tmp'
+class AAAProfile(utils.FileTransaction):
 
     def __init__(
         self,
@@ -695,10 +691,7 @@ class AAAProfile(utils.Base):
             if p.wait() != 0:
                 raise RuntimeError('Failed to execute keytool')
 
-        with open(
-            '%s%s' % (self._files['authzFile'], self._TMP_SUFFIX),
-            'w'
-        ) as f:
+        with self.getFileName(self._files['authzFile'], forceNew=True) as f:
             _writelog(
                 f,
                 (
@@ -718,10 +711,7 @@ class AAAProfile(utils.Base):
                     'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
-        with open(
-            '%s%s' % (self._files['authnFile'], self._TMP_SUFFIX),
-            'w'
-        ) as f:
+        with self.getFileName(self._files['authnFile'], forceNew=True) as f:
             _writelog(
                 f,
                 (
@@ -744,10 +734,7 @@ class AAAProfile(utils.Base):
                     'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
-        with open(
-            '%s%s' % (self._files['configFile'], self._TMP_SUFFIX),
-            'w'
-        ) as f:
+        with self.getFileName(self._files['configFile'], forceNew=True) as f:
             os.chmod(f.name, 0o660)
             if os.getuid() == 0:
                 os.chown(
@@ -779,19 +766,7 @@ class AAAProfile(utils.Base):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self.logger.debug('Commit')
-            for f in self._files.values():
-                tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
-                if os.path.exists(tmp_file):
-                    os.rename(tmp_file, f)
-
-        else:
-            self.logger.debug('Rollback')
-            for f in self._files.values():
-                tmp_file = '%s%s' % (f, self._TMP_SUFFIX)
-                if os.path.exists(tmp_file):
-                    os.unlink(tmp_file)
+        super(AAAProfile, self).__exit__(exc_type, exc_value, traceback)
 
 
 class RollbackError(RuntimeError):
