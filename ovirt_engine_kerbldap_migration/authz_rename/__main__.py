@@ -123,6 +123,30 @@ def parse_args():
 
 
 def overrideAuthz(args, engine):
+
+    AUTHZ_MATCHER = re.compile(
+        flags=re.MULTILINE | re.VERBOSE,
+        pattern=r"""
+            ^
+            \s*
+            (?P<key>
+                (
+                    ovirt\.engine\.aaa\.authn\.authz\.plugin
+                    |
+                    ovirt\.engine\.extension\.name
+                )
+            )
+            \s*
+            =
+            \s*
+            (?P<value>{authzName})
+            \s*
+            $
+        """.format(
+            authzName=re.escape(args.authzName),
+        ),
+    )
+
     logger = logging.getLogger(utils.Base.LOG_PREFIX)
 
     logger.info('Connecting to database')
@@ -157,26 +181,19 @@ def overrideAuthz(args, engine):
                     fpath = os.path.join(dname, fname)
                     with open(fpath, 'r') as f:
                         content = f.read()
-                    authzObj = re.search(
-                        r'^(?P<key>(\b%s\b|\b%s\b)\s+=)\s*(?P<val>%s)\s*$' % (
-                            'ovirt.engine.aaa.authn.authz.plugin',
-                            'ovirt.engine.extension.name',
-                            args.authzName
-                        ),
-                        content,
-                        re.MULTILINE,
-                    )
-                    if authzObj:
-                        content = re.sub(
-                            r'(%s).*' % authzObj.group('key'),
-                            '\\1 %s' % args.newName,
-                            content,
-                        )
+                    newcontent = ""
+                    last = 0
+                    for x in AUTHZ_MATCHER.finditer(content):
+                        newcontent += x.string[last:x.start('key')]
+                        newcontent += '%s = %s' % (x.group('key'), 'balon')
+                        last = x.end('value')
+                    newcontent += content[last:]
+                    if newcontent != content:
                         with open(
                             filetransaction.getFileName(fpath),
                             'w'
                         ) as f:
-                            f.write(content)
+                            f.write(newcontent)
                         aaadao.updateUsers(
                             'domain',
                             args.authzName,
