@@ -123,37 +123,43 @@ def parse_args():
 
 def overrideAuthz(args, engine):
     logger = logging.getLogger(utils.Base.LOG_PREFIX)
-    logger.info('Connecting to database')
 
+    logger.info('Connecting to database')
     statement = engine.getStatement()
 
-    with statement:
-        aaadao = AAADAO(statement)
+    with utils.FileTransaction() as filetransaction:
+        with statement:
+            aaadao = AAADAO(statement)
 
-        logger.info('Sanity checks')
-        if aaadao.isAuthzExists(args.newName):
-            raise RuntimeError(
-                "User/Group from domain '%s' exists in database" % (
-                    args.newName
+            logger.info('Sanity checks')
+            if aaadao.isAuthzExists(args.newName):
+                raise RuntimeError(
+                    "User/Group from domain '%s' exists in database" % (
+                        args.newName
+                    )
                 )
+
+            logger.info(
+                'Updating users/groups from %s to %s',
+                args.authzName,
+                args.newName,
             )
 
-        logger.info(
-            'Updating users/groups from %s to %s', args.authzName, args.newName
-        )
-
-        updated = False
-        for dname, dirs, files in os.walk('/etc/ovirt-engine/extensions.d/'):
-            for fname in files:
-                fpath = os.path.join(dname, fname)
-                with utils.FileTransaction() as aaafile:
+            updated = False
+            for dname, dirs, files in os.walk(
+                os.path.join(
+                    engine.prefix,
+                    'etc/ovirt-engine/extensions.d',
+                )
+            ):
+                for fname in files:
+                    fpath = os.path.join(dname, fname)
                     with open(fpath, 'r') as f:
                         content = f.read()
                     if content.find(args.authzName) > 0:
                         content = content.replace(args.authzName, args.newName)
-                        with aaafile.getFileName(fpath) as fd:
-                            fd.write(content)
-                        aaafile._files[fpath] = fpath
+                        with open(filetransaction.getFileName(fpath)) as f:
+                            f.write(content)
                         aaadao.updateUsers(
                             'domain',
                             args.authzName,
@@ -166,9 +172,10 @@ def overrideAuthz(args, engine):
                         )
                         updated = True
 
-        if not updated:
-            raise RuntimeError('Authz %s was not found.' % args.authzName)
-        logger.info('Authz was successfully renamed to %s', args.newName)
+            if not updated:
+                raise RuntimeError('Authz %s was not found.' % args.authzName)
+
+            logger.info('Authz was successfully renamed to %s', args.newName)
 
 
 def main():

@@ -1,7 +1,9 @@
 import base64
+import datetime
 import glob
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -410,44 +412,60 @@ def setupLogger(log=None, debug=False):
 
 class FileTransaction(Base):
 
-    _BACKUP_SUFFIX = '.bkp'
-    _TMP_SUFFIX = '.tmp'
-    _files = {}
+    _files = []
 
     def __init__(self):
         super(FileTransaction, self).__init__()
 
     def _copyFile(self, src, dest):
-        with open(src, 'r') as fd_src:
-            with open(dest, 'w') as fd_dest:
-                fd_dest.write(fd_src.read())
+        shutil.copyfile(src, dest)
+        shutil.copystat(src, dest)
+        srcStat = os.stat(src)
+        os.chown(
+            dest,
+            srcStat.st_uid,
+            srcStat.st_gid
+        )
 
     def getFileName(self, name, forceNew=False):
         if forceNew and os.path.exists(name):
             raise RuntimeError('File %s already exists' % name)
 
         if os.path.exists(name):
-            self._copyFile(name, '%s%s' % (name, self._BACKUP_SUFFIX))
+            self._copyFile(
+                name,
+                '%s.%s' % (
+                    name,
+                    datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+                )
+            )
 
-        return open('%s%s' % (name, self._TMP_SUFFIX), 'w')
+        fd, tmpname = tempfile.mkstemp(
+            suffix='.tmp',
+            prefix='%s.' % os.path.basename(name),
+            dir=os.path.dirname(name),
+        )
+        os.close(fd)
+
+        self.logger.debug("Temp name for '%s' is '%s'", name, tmpname)
+        self._files.append((tmpname, name))
+
+        return tmpname
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
-            self.logger.debug('Commit')
-            self.logger.debug(self._files)
-            for k, f in self._files.iteritems():
-                temp_file = '%s%s' % (f, self._TMP_SUFFIX)
-                self.logger.debug(temp_file)
-                if os.path.exists(temp_file):
-                    os.rename(temp_file, f)
+            self.logger.debug('Commit', self._files)
+            for tmpname, name in self._files:
+                if os.path.exists(tmpname):
+                    os.rename(tmpname, name)
         else:
             self.logger.debug('Rollback')
-            for f in self._files:
-                if os.path.exists(f):
-                    os.unlink(f)
+            for tmpname, name in self._files:
+                if os.path.exists(tmpname):
+                    os.unlink(tmpname)
 
 
 # vim: expandtab tabstop=4 shiftwidth=4
