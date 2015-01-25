@@ -602,7 +602,7 @@ class ADLDAP(LDAP):
         )
 
 
-class AAAProfile(utils.FileTransaction):
+class AAAProfile(utils.Base):
 
     def __init__(
         self,
@@ -610,6 +610,7 @@ class AAAProfile(utils.FileTransaction):
         authnName,
         authzName,
         driver,
+        filetransaction,
         prefix='/',
     ):
         super(AAAProfile, self).__init__()
@@ -619,6 +620,7 @@ class AAAProfile(utils.FileTransaction):
             'etc/ovirt-engine/extensions.d',
         )
         self._driver = driver
+        self._filetransaction = filetransaction
         self._vars = dict(
             authnName=authnName,
             authzName=authzName,
@@ -691,7 +693,12 @@ class AAAProfile(utils.FileTransaction):
             if p.wait() != 0:
                 raise RuntimeError('Failed to execute keytool')
 
-        with self.getFileName(self._files['authzFile'], forceNew=True) as f:
+        with open(
+            self._filetransaction.getFileName(
+                self._files['authzFile'],
+                forceNew=True,
+            )
+        ) as f:
             _writelog(
                 f,
                 (
@@ -711,7 +718,12 @@ class AAAProfile(utils.FileTransaction):
                     'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
-        with self.getFileName(self._files['authnFile'], forceNew=True) as f:
+        with open(
+            self._filetransaction.getFileName(
+                self._files['authnFile'],
+                forceNew=True,
+            )
+        ) as f:
             _writelog(
                 f,
                 (
@@ -734,7 +746,12 @@ class AAAProfile(utils.FileTransaction):
                     'config.profile.file.1 = {configFile}\n'
                 ).format(**self._vars)
             )
-        with self.getFileName(self._files['configFile'], forceNew=True) as f:
+        with open(
+            self._filetransaction.getFileName(
+                self._files['configFile'],
+                forceNew=True
+            )
+        ) as f:
             os.chmod(f.name, 0o660)
             if os.getuid() == 0:
                 os.chown(
@@ -904,58 +921,63 @@ def convert(args, engine):
     logger.info('Connecting to database')
     statement = engine.getStatement()
 
-    with statement:
-        aaadao = AAADAO(statement)
+    with utils.FileTransaction() as filetransaction:
+        with statement:
+            aaadao = AAADAO(statement)
 
-        logger.info('Sanity checks')
-        if aaadao.isAuthzExists(args.authzName):
-            raise RuntimeError(
-                "User/Group from domain '%s' exists in database" % (
-                    args.authzName
+            logger.info('Sanity checks')
+            if aaadao.isAuthzExists(args.authzName):
+                raise RuntimeError(
+                    "User/Group from domain '%s' exists in database" % (
+                        args.authzName
+                    )
                 )
+
+            logger.info('Loading options')
+            domainEntry = utils.VdcOptions(statement).getDomainEntry(
+                args.domain,
+            )
+            if not all([domainEntry.values()]):
+                raise RuntimeError(
+                    "Domain '%s' does not exists. Exiting." % args.domain
+                )
+
+            domainEntry['password'] = utils.OptionDecrypt(
+                prefix=engine.prefix
+            ).decrypt(
+                domainEntry['password'],
+            )
+            if args.ldapServers:
+                domainEntry['ldapServers'] = args.ldapServers
+
+            driver = DRIVERS.get(domainEntry['provider'])
+            if driver is None:
+                raise RuntimeError(
+                    "Provider '%s' is not supported" % domainEntry['provider']
+                )
+
+            driver = driver(utils.Kerberos(engine.prefix), args.domain)
+            driver.connect(
+                dnsDomain=args.domain,
+                ldapServers=domainEntry['ldapServers'],
+                saslUser=domainEntry['user'],
+                bindUser=args.bindUser,
+                bindPassword=(
+                    args.bindPassword if args.bindPassword
+                    else domainEntry['password']
+                ),
+                cacert=args.cacert
             )
 
-        logger.info('Loading options')
-        domainEntry = utils.VdcOptions(statement).getDomainEntry(args.domain)
-        if not all([domainEntry.values()]):
-            raise RuntimeError(
-                "Domain '%s' does not exists. Exiting." % args.domain
+            aaaprofile = AAAProfile(
+                profile=args.profile,
+                authnName=args.authnName,
+                authzName=args.authzName,
+                driver=driver,
+                filetransaction=filetransaction,
+                prefix=engine.prefix,
             )
 
-        domainEntry['password'] = utils.OptionDecrypt(
-            prefix=engine.prefix
-        ).decrypt(
-            domainEntry['password'],
-        )
-        if args.ldapServers:
-            domainEntry['ldapServers'] = args.ldapServers
-
-        driver = DRIVERS.get(domainEntry['provider'])
-        if driver is None:
-            raise RuntimeError(
-                "Provider '%s' is not supported" % domainEntry['provider']
-            )
-
-        driver = driver(utils.Kerberos(engine.prefix), args.domain)
-        driver.connect(
-            dnsDomain=args.domain,
-            ldapServers=domainEntry['ldapServers'],
-            saslUser=domainEntry['user'],
-            bindUser=args.bindUser,
-            bindPassword=(
-                args.bindPassword if args.bindPassword
-                else domainEntry['password']
-            ),
-            cacert=args.cacert
-        )
-
-        with AAAProfile(
-            profile=args.profile,
-            authnName=args.authnName,
-            authzName=args.authzName,
-            driver=driver,
-            prefix=engine.prefix,
-        ) as aaaprofile:
             logger.info('Converting users')
             users = {}
             for legacyUser in aaadao.fetchLegacyUsers(args.domain):
