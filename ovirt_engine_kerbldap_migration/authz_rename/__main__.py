@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 
 
@@ -156,9 +157,25 @@ def overrideAuthz(args, engine):
                     fpath = os.path.join(dname, fname)
                     with open(fpath, 'r') as f:
                         content = f.read()
-                    if content.find(args.authzName) > 0:
-                        content = content.replace(args.authzName, args.newName)
-                        with open(filetransaction.getFileName(fpath)) as f:
+                    authzObj = re.search(
+                        r'^(?P<key>(\b%s\b|\b%s\b)\s+=)\s*(?P<val>%s)\s*$' % (
+                            'ovirt.engine.aaa.authn.authz.plugin',
+                            'ovirt.engine.extension.name',
+                            args.authzName
+                        ),
+                        content,
+                        re.MULTILINE,
+                    )
+                    if authzObj:
+                        content = re.sub(
+                            r'(%s).*' % authzObj.group('key'),
+                            '\\1 %s' % args.newName,
+                            content,
+                        )
+                        with open(
+                            filetransaction.getFileName(fpath),
+                            'w'
+                        ) as f:
                             f.write(content)
                         aaadao.updateUsers(
                             'domain',

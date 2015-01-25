@@ -457,7 +457,7 @@ class FileTransaction(Base):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
-            self.logger.debug('Commit', self._files)
+            self.logger.debug('Commit %s', self._files)
             for tmpname, name in self._files:
                 if os.path.exists(tmpname):
                     os.rename(tmpname, name)

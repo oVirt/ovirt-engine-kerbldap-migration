@@ -697,7 +697,8 @@ class AAAProfile(utils.Base):
             self._filetransaction.getFileName(
                 self._files['authzFile'],
                 forceNew=True,
-            )
+            ),
+            'w',
         ) as f:
             _writelog(
                 f,
@@ -722,7 +723,8 @@ class AAAProfile(utils.Base):
             self._filetransaction.getFileName(
                 self._files['authnFile'],
                 forceNew=True,
-            )
+            ),
+            'w',
         ) as f:
             _writelog(
                 f,
@@ -750,7 +752,8 @@ class AAAProfile(utils.Base):
             self._filetransaction.getFileName(
                 self._files['configFile'],
                 forceNew=True
-            )
+            ),
+            'w',
         ) as f:
             os.chmod(f.name, 0o660)
             if os.getuid() == 0:
