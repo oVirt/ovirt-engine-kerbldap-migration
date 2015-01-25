@@ -900,6 +900,8 @@ def convert(args, engine):
     }
 
     logger = logging.getLogger(utils.Base.LOG_PREFIX)
+
+    logger.info('Connecting to database')
     statement = engine.getStatement()
 
     with statement:

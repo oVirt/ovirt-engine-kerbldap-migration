@@ -123,6 +123,7 @@ def parse_args():
 
 def overrideAuthz(args, engine):
     logger = logging.getLogger(utils.Base.LOG_PREFIX)
+
     logger.info('Connecting to database')
 
     statement = engine.getStatement()
