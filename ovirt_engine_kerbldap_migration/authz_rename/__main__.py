@@ -225,6 +225,7 @@ def main():
 
 
 if __name__ == '__main__':
+    os.umask(0o022)
     sys.exit(main())
 
 
