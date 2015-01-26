@@ -656,6 +656,14 @@ class AAAProfile(utils.Base):
                 )
 
     def save(self):
+        def _setPermissions(f):
+            if os.getuid() == 0:
+                os.chown(
+                    f.name,
+                    pwd.getpwnam('ovirt').pw_uid,
+                    grp.getgrnam('ovirt').gr_gid,
+                )
+
         def _writelog(f, s):
             self.logger.debug("Write '%s'\n%s", f, s)
             f.write(s)
@@ -700,6 +708,7 @@ class AAAProfile(utils.Base):
             ),
             'w',
         ) as f:
+            _setPermissions(f)
             _writelog(
                 f,
                 (
@@ -726,6 +735,7 @@ class AAAProfile(utils.Base):
             ),
             'w',
         ) as f:
+            _setPermissions(f)
             _writelog(
                 f,
                 (
@@ -756,12 +766,7 @@ class AAAProfile(utils.Base):
             'w',
         ) as f:
             os.chmod(f.name, 0o660)
-            if os.getuid() == 0:
-                os.chown(
-                    f.name,
-                    pwd.getpwnam('ovirt').pw_uid,
-                    grp.getgrnam('ovirt').gr_gid,
-                )
+            _setPermissions(f)
             _writelog(
                 f,
                 (
