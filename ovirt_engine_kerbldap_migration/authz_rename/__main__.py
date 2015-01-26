@@ -35,16 +35,15 @@ class AAADAO(utils.Base):
             ),
         ) == 0
 
-    def _updateColumn(self, table, column, value, oldValue):
+    def _updateColumn(self, table, value, oldValue):
         self._statement.execute(
             statement="""
                 update {table} set
-                    {column} = %(value)s
+                    domain = %(value)s
                 where
-                    {column} = %(oldValue)s
+                    domain = %(oldValue)s
             """.format(
                 table=table,
-                column=column,
             ),
             args=dict(
                 value=value,
@@ -52,11 +51,9 @@ class AAADAO(utils.Base):
             ),
         )
 
-    def updateUsers(self, column, value, oldValue):
-        self._updateColumn('users', column, value, oldValue)
-
-    def updateGroups(self, column, value, oldValue):
-        self._updateColumn('ad_groups', column, value, oldValue)
+    def update(self, value, oldValue):
+        self._updateColumn('users', value, oldValue)
+        self._updateColumn('ad_groups', value, oldValue)
 
 
 class RollbackError(RuntimeError):
@@ -194,13 +191,7 @@ def overrideAuthz(args, engine):
                             'w'
                         ) as f:
                             f.write(newcontent)
-                        aaadao.updateUsers(
-                            'domain',
-                            args.authzName,
-                            args.newName
-                        )
-                        aaadao.updateGroups(
-                            'domain',
+                        aaadao.update(
                             args.authzName,
                             args.newName
                         )
