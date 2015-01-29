@@ -797,8 +797,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog='%s-tool' % config.PACKAGE_NAME,
         description=(
-            'Convert legacy users/groups with permissions '
-            'into new extension api.'
+            'Migrate legacy users/groups with permissions '
+            'into new ldap provider.'
         ),
     )
     parser.add_argument(
