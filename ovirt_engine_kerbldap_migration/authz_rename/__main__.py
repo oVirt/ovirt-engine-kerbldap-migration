@@ -82,12 +82,6 @@ def parse_args():
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        '--apply',
-        default=False,
-        action='store_true',
-        help='apply settings'
-    )
-    parser.add_argument(
         '--debug',
         default=False,
         action='store_true',
@@ -98,6 +92,12 @@ def parse_args():
         metavar='FILE',
         default=None,
         help='write log into file',
+    )
+    parser.add_argument(
+        '--apply',
+        default=False,
+        action='store_true',
+        help='apply settings'
     )
     parser.add_argument(
         '--authz-name',
@@ -201,6 +201,11 @@ def overrideAuthz(args, engine):
                 raise RuntimeError('Authz %s was not found.' % args.authzName)
 
             logger.info('Authz was successfully renamed to %s', args.newName)
+
+            if not args.apply:
+                raise RollbackError(
+                    'Apply parameter was not specified rolling back'
+                )
 
 
 def main():

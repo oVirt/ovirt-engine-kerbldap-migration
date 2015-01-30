@@ -1,13 +1,153 @@
 ovirt-engine-kerbldap-migration
 ===============================
 
-This project contains two different tools. Each tool is described below.
+A package to ease migration from oVirt engine legacy LDAP provider into
+the new ovirt-engine-extension-aaa-ldap provider, which is much more
+robust, flexible and easy to manage.
 
-## Migration tool
-Migration tool will search for all users/groups and its permissions of a specified domain and copy those users to be usable within new ldap provider. It easily map old legacy users/groups added via manage-domains command to new ldap provider. It also create needed configuration files.
-After running this command and restarting engine service you should be able to use new ldap provider with your earlier added users.
+This package contains two tools:
+* Migration tool - a tool to duplicate all users, groups and permissions
+  from existing provider into the new provider and create new provider
+  configuration files.
+* Authz rename - due to rhbz#1133137, the name of authz may be important,
+  in cases that password delegation into VM are used, it is required to
+  rename the authz name to the original name.
 
-### Usage:
+## Migration sequence
+
+1. Install ovirt-engine-extension-aaa-ldap package.
+    ```
+    # yum install ovirt-engine-extension-aaa-ldap
+    ```
+
+2. Choose the domain you want to convert.
+    ```
+    # engine-manage-domains list
+    Domain: myldap.com
+        User name: searchuser@MYLDAP.COM
+    Manage Domains completed successfully
+    ```
+
+3. [Optional] Obtaining LDAP CA certificate.
+
+    We strongly recommend of using TLS/SSL protocol to communicate with
+    LDAP securely. Doing so requires the CA certificate that issued the
+    LDAP service certificate.
+
+    If you do not wish to use TLS/SSL specify --cacert NONE in the
+    following commands.
+
+    **TODO**: describe how to obtain ROOT CA, this is different per LDAP,
+    we can explain AD, IPA, OpenLDAP. The command you used is not
+    providing the root, but intermediate in most configurations, and also
+    it relays on using LDAP over SSL and not startTLS.
+
+4. Execute migration tool in non destructive mode.
+    ```
+    # ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert /tmp/myldap.crt
+    <snip>
+    [WARNING] Apply parameter was not specified rolling back
+    ```
+
+    The migration tool will search for all users, groups and permissions
+    of selected domain and will duplicate them into the new domain. It
+    will also create the configuration needed to run the new provider.
+
+    Please refer to *ovirt-engine-kerbldap-migration-tool* usage for
+    additional options.
+
+    Before proceeding, make sure no error is printed. In case of an error
+    please refer to the problem determination section.
+
+5. Execute migration tool and apply settings.
+    ```
+    # ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert /tmp/myldap.crt --apply
+    <snip>
+    [INFO   ] Conversion completed
+    <snip>
+    ```
+
+6. Restart engine.
+    ```
+    # service ovirt-engine restart
+    or:
+    # systemctl restart ovirt-engine
+    ```
+
+7. Test drive your new provider
+
+    * Profile name will be *myldap.com*-new.
+    * Try to login using your current user names, checkout group assignments.
+    * Try to search directory, the authz name will be  *myldap.com*-authz.
+
+8. Remove the legacy provider.
+    ```
+    # engine-manage-domains delete --domain=myldap.com --force
+    Successfully deleted domain myldap.com. Please remove all users and groups of this domain using the Administration portal or the API. oVirt Engine restart is required in order for the changes to take place (service ovirt-engine restart).
+    Manage Domains completed successfully
+    ```
+
+9. Restart engine.
+    ```
+    # service ovirt-engine restart
+    or:
+    # systemctl restart ovirt-engine
+    ```
+
+10. Remove all legacy users and groups.
+
+    * Login into WebAdmin.
+    * Go to Users tab.
+    * Sort by "Authorization provider".
+    * Remove all that have "Authorization provider" *myldap.com*.
+
+11. [OPTIONAL] Rename authz to match legacy convention.
+
+    These staps are required only if the VM password delegation feature
+    is being used (Aka VM SSO).
+
+    1. Execute authz rename tool in non destructive mode.
+        ```
+        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-authz --new-name myldap.com
+        <snip>
+        [WARNING] Apply parameter was not specified rolling back
+        ```
+
+        Please refer to *ovirt-engine-kerbldap-migration-tool* usage for
+        additional options.
+
+        Before proceeding, make sure no error is printed. In case of an error
+        please refer to the problem determination section.
+
+    2. Execute authz rename tool and apply settings.
+
+        ```
+        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-authz --new-name myldap.com
+        <snip>
+        [INFO   ] Authz was successfully renamed to myldap.com
+        ```
+
+    3. Restart engine.
+        ```
+        # service ovirt-engine restart
+        or:
+        # systemctl restart ovirt-engine
+        ```
+
+## Troubleshooting:
+
+#### Enabling debug log
+Add `--debug and --log=/tmp/debug.log` parameters to commands.
+
+#### Simple bind disabled at LDAP server side
+```
+[ERROR  ] Conversion failed: {'desc': 'Inappropriate authentication'}
+```
+You have to enable simple bind for your search user
+
+## Usage
+
+### ovirt-engine-kerbldap-migration-tool
 ```
 usage: ovirt-engine-kerbldap-migration-tool [-h] [--version] [--debug]
                                             [--log FILE] [--apply] --domain
@@ -43,65 +183,8 @@ optional arguments:
   --ldap-servers DNS    specify ldap servers explicitly instead of performing
                         autodetection
 ```
-### Proccess of use:
-1) Choose the domain you want to convert.
-```
-$ engine-manage-domains list
-Domain: myldap.com
-	User name: searchuser@MYLDAP.COM
-Manage Domains completed successfully
-```
-2)[Optional] We strongly recommend this step. Since, without this step you will be using plain connection to ldap. If you obtain your certificate and setup SSL/TLS on your ldap, then the communication will be encrypted.
-```
-$ echo | openssl s_client -connect myldap.com:ldaps 2>&1 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > myldap.crt
-```
-3) Run migration tool without apply and see everthing is fine. Run with --cacert /path/to/cert if you have SSL/TLS or run with --cacert NONE if don't have SSL/TLS setup.
-```
-$ ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert myldap.crt --debug --log /tmp/myldap.log
-[INFO   ] Connecting to database
-[INFO   ] Sanity checks
-[INFO   ] Loading options
-[INFO   ] Converting users
-[INFO   ] Converting groups
-[INFO   ] Converting permissions
-[INFO   ] Adding new users
-[INFO   ] Adding new groups
-[INFO   ] Adding new permissions
-[INFO   ] Creating new extensions configuration
-[INFO   ] Conversion completed
-[INFO   ] Conversion was done using single server. Please refer to ovirt-engine-extension-aaa-ldap documentation if you would like to apply failover or other fallback policy.
-[WARNING] Apply parameter was not specified rolling back
-```
-4) Run migration tool with apply and see everthing is fine.
-```
-$ ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert myldap.crt --debug --log /tmp/myldap.log --apply
-[INFO   ] Connecting to database
-[INFO   ] Sanity checks
-[INFO   ] Loading options
-[INFO   ] Converting users
-[INFO   ] Converting groups
-[INFO   ] Converting permissions
-[INFO   ] Adding new users
-[INFO   ] Adding new groups
-[INFO   ] Adding new permissions
-[INFO   ] Creating new extensions configuration
-[INFO   ] Conversion completed
-[INFO   ] Conversion was done using single server. Please refer to ovirt-engine-extension-aaa-ldap documentation if you would like to apply failover or other fallback policy.
-```
-5) Test new ldap provider. Check /var/log/ovirt-engine/engine.log if there are no error messages.
-6) Remove legacy domain.
-```
-$ rhevm-manage-domains delete --domain=myldap.com --force
-Successfully deleted domain myldap.com. Please remove all users and groups of this domain using the Administration portal or the API. oVirt Engine restart is required in order for the changes to take place (service ovirt-engine restart).
-Manage Domains completed successfully
-```
-7) Remove all old users/groups from legacy domain.
-8) Use Authz renamte tool if needed. See below for description and usage.
 
-## Authz rename tool
-This tool will search within /etc/ovirt-engine/extension.d directory for authz and rename it to new name if authz is found and new name doesn't already exists in database. Both names are passed as command line arguments.
-
-### Usage:
+### ovirt-engine-kerbldap-migration-authz-rename
 ```
 usage: ovirt-engine-kerbldap-migration-authz-rename [-h] [--version] [--apply]
                                                     [--debug] [--log FILE]
@@ -113,15 +196,9 @@ Overrired current authz with new authz.
 optional arguments:
   -h, --help         show this help message and exit
   --version          show program's version number and exit
-  --apply            apply settings
   --debug            enable debug log
   --log FILE         write log into file
+  --apply            apply settings
   --authz-name NAME  name of authz you want to rename
   --new-name NAME    new name of authz extension
 ```
-
-## Troubleshooting:
-```
-[ERROR  ] Conversion failed: {'desc': 'Inappropriate authentication'}
-```
-* Means that you can't connect via ldap simple, you have to enable simple bind for your search user
