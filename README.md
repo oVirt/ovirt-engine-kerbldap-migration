@@ -37,10 +37,16 @@ This package contains two tools:
     If you do not wish to use TLS/SSL specify --cacert NONE in the
     following commands.
 
-    **TODO**: describe how to obtain ROOT CA, this is different per LDAP,
-    we can explain AD, IPA, OpenLDAP. The command you used is not
-    providing the root, but intermediate in most configurations, and also
-    it relays on using LDAP over SSL and not startTLS.
+  Active Directory:
+  1. Press "Start" -> "Run" and write "cmd" and press "Enter".
+  2. Into cmd write "certutil -ca.cert ad.crt"
+  3. Copy "ca.crt" to ovirt machine.
+  
+  OpenLDAP:
+  1. In your slapd.conf find the value of "TLSCACertificateFile". This value is path to your certificate. Copy it to your ovirt machine.
+  
+  FreeIPA:
+  1. In IPA you can find root CA at "/etc/ipa/ca.crt", copy it to your ovirt machine.
 
 4. Execute migration tool in non destructive mode.
     ```
