@@ -38,21 +38,18 @@ This package contains two tools:
     following commands.
 
   **Active Directory**
-  ```
-  1. Press "Start" -> "Run" and write "cmd" and press "Enter".
-  2. Into cmd write "certutil -ca.cert ad.crt"
-  3. Copy "ca.crt" to ovirt machine.
-  ```
+
+    1. Press "Start" -> "Run" and write "cmd" and press "Enter".
+    2. Into cmd write "certutil -ca.cert ad.crt"
+    3. Copy "ca.crt" to ovirt machine.
   
   **OpenLDAP**
-  ```
-  In your slapd.conf find the value of "TLSCACertificateFile". This value is path to your certificate. Copy it to your ovirt machine.
-  ```
+
+    In your slapd.conf find the value of "TLSCACertificateFile". This value is path to your certificate. Copy it to your ovirt machine.
   
   **FreeIPA**
-  ```
-  In IPA you can find root CA at "/etc/ipa/ca.crt", copy it to your ovirt machine.
-  ```
+
+    In IPA you can find root CA at "/etc/ipa/ca.crt", copy it to your ovirt machine.
 
 4. Execute migration tool in non destructive mode.
     ```
