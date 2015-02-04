@@ -45,11 +45,13 @@ This package contains two tools:
   
   **OpenLDAP**
 
-    In your slapd.conf find the value of "TLSCACertificateFile". This value is path to your certificate. Copy it to your ovirt machine.
+    In your slapd.conf find the value of "TLSCACertificateFile". This value
+    is path to your certificate. Copy it to your ovirt machine.
   
   **FreeIPA**
 
-    In IPA you can find root CA at "/etc/ipa/ca.crt", copy it to your ovirt machine.
+    In IPA you can find root CA at "/etc/ipa/ca.crt", copy it to your ovirt
+    machine.
 
 4. Execute migration tool in non destructive mode.
     ```
