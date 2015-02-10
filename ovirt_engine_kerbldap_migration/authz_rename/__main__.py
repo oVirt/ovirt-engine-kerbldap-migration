@@ -212,6 +212,12 @@ def main():
     args = parse_args()
     utils.setupLogger(log=args.log, debug=args.debug)
     logger = logging.getLogger(utils.Base.LOG_PREFIX)
+    logger.info(
+        'authz-rename: %s-%s (%s)',
+        config.PACKAGE_NAME,
+        config.PACKAGE_VERSION,
+        config.LOCAL_VERSION
+    ),
     logger.debug('Arguments: %s', args)
 
     engine = utils.Engine(prefix=args.prefix)

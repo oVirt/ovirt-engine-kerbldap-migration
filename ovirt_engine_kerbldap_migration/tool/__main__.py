@@ -665,6 +665,14 @@ class AAAProfile(utils.Base):
 
         cacert = self._driver.getCACert()
         if cacert:
+            keystore = self._filetransaction.getFileName(
+                self._files['trustStore'],
+                forceNew=True,
+            )
+            # keytool does not like empty files
+            if os.path.exists(keystore):
+                os.unlink(keystore)
+
             from ovirt_engine import java
             p = subprocess.Popen(
                 [
@@ -677,10 +685,7 @@ class AAAProfile(utils.Base):
                     '-noprompt',
                     '-trustcacerts',
                     '-storetype', 'JKS',
-                    '-keystore', '%s%s' % (
-                        self._files['trustStore'],
-                        self._TMP_SUFFIX,
-                    ),
+                    '-keystore', keystore,
                     '-storepass', 'changeit',
                     '-file', cacert,
                     '-alias', 'myca',
@@ -951,7 +956,7 @@ def convert(args, engine):
                 domainEntry['password'],
             )
             if args.ldapServers:
-                domainEntry['ldapServers'] = args.ldapServers
+                domainEntry['ldapServers'] = args.ldapServers.split(',')
 
             driver = DRIVERS.get(domainEntry['provider'])
             if driver is None:
@@ -1079,6 +1084,12 @@ def main():
     args = parse_args()
     utils.setupLogger(log=args.log, debug=args.debug)
     logger = logging.getLogger(utils.Base.LOG_PREFIX)
+    logger.info(
+        'tool: %s-%s (%s)',
+        config.PACKAGE_NAME,
+        config.PACKAGE_VERSION,
+        config.LOCAL_VERSION
+    ),
     logger.debug('Arguments: %s', args)
 
     engine = utils.Engine(prefix=args.prefix)
