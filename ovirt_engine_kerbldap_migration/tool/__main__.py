@@ -206,6 +206,7 @@ class LDAP(utils.Base):
     _profile = None
     _bindUser = None
     _bindPassword = None
+    _dnsDomain = None
     _bindURI = None
     _cacert = None
 
@@ -230,7 +231,13 @@ class LDAP(utils.Base):
         return id
 
     def _determineBindURI(self, dnsDomain, ldapServers):
-        return 'ldap://%s' % (ldapServers[0] if ldapServers else dnsDomain)
+        if ldapServers is None:
+            ldapServers = utils.DNS().resolveSRVRecord(
+                domain=dnsDomain,
+                protocol='tcp',
+                service='ldap',
+            )
+        return 'ldap://%s' % ldapServers[0]
 
     def _encodeLdapId(self, id):
         return id
@@ -275,6 +282,7 @@ class LDAP(utils.Base):
             bindUser,
             cacert,
         )
+        self._dnsDomain = dnsDomain
         self._bindUser = (
             bindUser if bindUser
             else self._determineBindUser(
@@ -383,9 +391,9 @@ class SimpleLDAP(LDAP):
         connection = None
         try:
             connection = ldap.initialize(
-                'ldap://%s' % (
-                    ldapServers[0] if ldapServers
-                    else dnsDomain
+                self._determineBindURI(
+                    dnsDomain,
+                    ldapServers,
                 )
             )
             connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
@@ -421,15 +429,6 @@ class SimpleLDAP(LDAP):
             if connection:
                 connection.unbind_s()
             self._kerberos.kdestroy()
-
-    def _determineBindURI(self, dnsDomain, ldapServers):
-        if ldapServers is None:
-            ldapServers = utils.DNS().resolveSRVRecord(
-                domain=dnsDomain,
-                protocol='tcp',
-                service='ldap',
-            )
-        return 'ldap://%s' % ldapServers[0]
 
     def getConfig(self):
         return (
@@ -598,7 +597,7 @@ class ADLDAP(LDAP):
         ).format(
             user=self._bindUser,
             password=self._bindPassword,
-            domain=urlparse.urlparse(self._bindURI).netloc,
+            domain=self._dnsDomain,
         )
 
 
