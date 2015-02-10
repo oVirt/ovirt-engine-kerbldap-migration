@@ -951,7 +951,7 @@ def convert(args, engine):
                 domainEntry['password'],
             )
             if args.ldapServers:
-                domainEntry['ldapServers'] = args.ldapServers
+                domainEntry['ldapServers'] = args.ldapServers.split(',')
 
             driver = DRIVERS.get(domainEntry['provider'])
             if driver is None:
