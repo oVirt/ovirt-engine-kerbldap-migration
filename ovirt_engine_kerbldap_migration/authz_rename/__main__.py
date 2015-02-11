@@ -190,6 +190,7 @@ def overrideAuthz(args, engine):
                             filetransaction.getFileName(fpath),
                             'w'
                         ) as f:
+                            os.chmod(f.name, 0o644)
                             f.write(newcontent)
                         aaadao.update(
                             args.authzName,
