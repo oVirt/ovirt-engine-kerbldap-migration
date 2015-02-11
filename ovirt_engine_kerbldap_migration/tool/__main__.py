@@ -704,6 +704,7 @@ class AAAProfile(utils.Base):
             ),
             'w',
         ) as f:
+            os.chmod(f.name, 0o644)
             _writelog(
                 f,
                 (
@@ -730,6 +731,7 @@ class AAAProfile(utils.Base):
             ),
             'w',
         ) as f:
+            os.chmod(f.name, 0o644)
             _writelog(
                 f,
                 (
