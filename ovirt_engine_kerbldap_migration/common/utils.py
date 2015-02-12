@@ -232,7 +232,7 @@ class DNS(Base):
             raise RuntimeError("Cannot resolve domain '%s'" % domain)
 
         ret = [
-            entry.target.to_text()[:-1] for entry in sorted(
+            entry.target.to_text().rstrip('.') for entry in sorted(
                 response,
                 key=lambda e: e.priority,
                 reverse=True,
