@@ -183,7 +183,8 @@ def overrideAuthz(args, engine):
                     for x in AUTHZ_MATCHER.finditer(content):
                         newcontent += x.string[last:x.start('key')]
                         newcontent += '%s = %s' % (
-                            x.group('key'), args.newName
+                            x.group('key'),
+                            args.newName,
                         )
                         last = x.end('value')
                     newcontent += content[last:]
