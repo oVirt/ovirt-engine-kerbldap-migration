@@ -635,7 +635,7 @@ class AAAProfile(utils.Base):
                 extensionsDir,
                 '..',
                 'aaa',
-                'ca.jks',
+                '%s.jks' % profile,
             ),
             authzFile=os.path.join(
                 extensionsDir,
@@ -778,12 +778,13 @@ class AAAProfile(utils.Base):
                     'pool.default.ssl.startTLS = {startTLS}\n'
 
                     'pool.default.ssl.truststore.file = '
-                    '${{local:_basedir}}/ca.jks\n'
+                    '${{local:_basedir}}/{profile}.jks\n'
 
                     'pool.default.ssl.truststore.password = changeit\n'
                 ).format(
                     common=self._driver.getConfig(),
                     startTLS='true' if cacert else 'false',
+                    profile=self._vars['profile'],
                 )
             )
 
