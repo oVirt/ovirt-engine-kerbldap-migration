@@ -265,6 +265,15 @@ class LDAP(utils.Base):
             ret['entryId'] = self._encodeLdapId(ret['entryId'])
         return ret
 
+    def _rootDSEAttribute(self, uri, attr):
+        return self.search(
+            '',
+            ldap.SCOPE_BASE,
+            '(objectClass=*)',
+            [attr],
+            ldap.initialize(uri) if uri else self._connection,
+        )[0][1][attr][0]
+
     def connect(
         self,
         dnsDomain,
@@ -291,22 +300,20 @@ class LDAP(utils.Base):
         self._bindURI = None
         for uri in self._determineBindURI(dnsDomain, ldapServers):
             try:
-                if self._determineNamespace():
+                if self._rootDSEAttribute(uri, 'supportedLDAPVersion'):
                     self._bindURI = uri
+                    self.logger.info('Using ldap URI: %s.' % uri)
                     break
-            except (TypeError, IndexError):
-                self.logger.debug(
-                    'URI %s is not connective. Trying other.' % uri
+            except Exception as e:
+                self.logger.warning(
+                    'URI %s is not connective. Trying other.', uri
                 )
-                continue
+                self.logger.debug(
+                    'Error while connecting to ldap %s: %s', uri, e
+                )
 
         if self._bindURI is None:
-            raise RuntimeError(
-                "Unable to bind as user '%s' to any provided ldaps (%s)" % (
-                    saslUser,
-                    ', '.join(ldapServers),
-                )
-            )
+            raise RuntimeError('No working ldap was found.')
 
         self._bindUser = (
             bindUser if bindUser
