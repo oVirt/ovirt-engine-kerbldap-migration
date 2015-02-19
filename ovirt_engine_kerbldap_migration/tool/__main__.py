@@ -302,7 +302,7 @@ class LDAP(utils.Base):
             try:
                 if self._rootDSEAttribute(uri, 'supportedLDAPVersion'):
                     self._bindURI = uri
-                    self.logger.info('Using ldap URI: %s.' % uri)
+                    self.logger.info('Using ldap URI: %s' % uri)
                     break
             except Exception as e:
                 self.logger.warning(
@@ -1029,8 +1029,8 @@ def convert(args, engine):
                             "User '%s' id '%s' could not be found, "
                             "probably deleted from directory"
                         ),
-                        legacyUser['external_id'],
                         legacyUser['username'],
+                        legacyUser['external_id'],
                     )
                 else:
                     e.update({
@@ -1052,8 +1052,8 @@ def convert(args, engine):
                             "Group '%s' id '%s' could not be found, "
                             "probably deleted from directory"
                         ),
-                        legacyGroup['external_id'],
                         legacyGroup['name'],
+                        legacyGroup['external_id'],
                     )
                 else:
                     e['domain'] = args.authzName
