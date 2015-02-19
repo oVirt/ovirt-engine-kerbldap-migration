@@ -240,7 +240,7 @@ class LDAP(utils.Base):
                 service='ldap',
             )
 
-        return map(lambda ldap: 'ldap://%s' % ldap, ldapServers)
+        return ['ldap://%s' % server for server in ldapServers]
 
     def _encodeLdapId(self, id):
         return id
