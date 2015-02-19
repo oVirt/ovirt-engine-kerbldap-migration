@@ -4,7 +4,6 @@ import grp
 import logging
 import os
 import pwd
-import socket
 import subprocess
 import sys
 import urlparse
@@ -218,13 +217,13 @@ class LDAP(utils.Base):
         self._kerberos = kerberos
         self._profile = profile
 
-    def _determineNamespace(self, connection=None):
+    def determineNamespace(self, connection=None):
         return None
 
     def _determineBindUser(
         self,
         dnsDomain,
-        ldapServers,
+        ldapServer,
         saslUser,
         bindPassword,
     ):
@@ -232,15 +231,6 @@ class LDAP(utils.Base):
 
     def _decodeLegacyEntryId(self, id):
         return id
-
-    def _isLDAPConnective(self, ldapServer, port=389):
-        s = socket.socket()
-        result = 1
-        try:
-            result = s.connect_ex((ldapServer, port))
-        finally:
-            s.close()
-            return not bool(result)
 
     def _determineBindURI(self, dnsDomain, ldapServers):
         if ldapServers is None:
@@ -250,13 +240,7 @@ class LDAP(utils.Base):
                 service='ldap',
             )
 
-        for ldapServer in ldapServers:
-            if self._isLDAPConnective(ldapServer):
-                return 'ldap://%s' % ldapServer
-
-        raise RuntimeError(
-            'Unable to contant any provided ldap (%s)' % ', '.join(ldapServers)
-        )
+        return map(lambda ldap: 'ldap://%s' % ldap, ldapServers)
 
     def _encodeLdapId(self, id):
         return id
@@ -302,21 +286,27 @@ class LDAP(utils.Base):
             cacert,
         )
         self._dnsDomain = dnsDomain
-        self._bindUser = (
-            bindUser if bindUser
-            else self._determineBindUser(
-                dnsDomain,
-                ldapServers,
-                saslUser,
-                bindPassword,
-            )
-        )
         self._bindPassword = bindPassword
+        self._bindUser = None
         self._cacert = cacert
-        self._bindURI = self._determineBindURI(
-            dnsDomain,
-            ldapServers,
-        )
+        for uri in self._determineBindURI(dnsDomain, ldapServers):
+            self._bindUser = (
+                bindUser if bindUser
+                else self._determineBindUser(
+                    dnsDomain,
+                    uri,
+                    saslUser,
+                    bindPassword,
+                )
+            )
+
+        if self._bindUser is None:
+            raise RuntimeError(
+                "Unable to bind as user '%s' to any provided ldaps (%s)" % (
+                    saslUser,
+                    ', '.join(ldapServers),
+                )
+            )
 
         self.logger.debug(
             "connect uri='%s', cacert='%s', bindUser='%s'",
@@ -325,8 +315,14 @@ class LDAP(utils.Base):
             self._bindUser,
         )
         self._connection = ldap.initialize(self._bindURI)
-        self._connection.set_option(ldap.OPT_REFERRALS, 0)
-        self._connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
+        self._connection.set_option(
+            ldap.OPT_REFERRALS,
+            0,
+        )
+        self._connection.set_option(
+            ldap.OPT_PROTOCOL_VERSION,
+            ldap.VERSION3,
+        )
         if self._cacert:
             self._connection.set_option(
                 ldap.OPT_X_TLS_REQUIRE_CERT,
@@ -406,19 +402,14 @@ class SimpleLDAP(LDAP):
     def _determineBindUser(
         self,
         dnsDomain,
-        ldapServers,
+        ldapServer,
         saslUser,
         bindPassword,
     ):
         self._kerberos.kinit(saslUser, bindPassword)
         connection = None
         try:
-            connection = ldap.initialize(
-                self._determineBindURI(
-                    dnsDomain,
-                    ldapServers,
-                )
-            )
+            connection = ldap.initialize(ldapServer)
             connection.set_option(ldap.OPT_PROTOCOL_VERSION, ldap.VERSION3)
             connection.set_option(ldap.OPT_REFERRALS, 0)
             connection.set_option(ldap.OPT_X_SASL_NOCANON, True)
@@ -571,7 +562,7 @@ class ADLDAP(LDAP):
     def _determineBindUser(
         self,
         dnsDomain,
-        ldapServers,
+        ldapServer,
         saslUser,
         bindPassword,
     ):
