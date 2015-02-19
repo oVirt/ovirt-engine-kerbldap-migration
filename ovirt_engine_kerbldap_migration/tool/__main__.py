@@ -287,20 +287,20 @@ class LDAP(utils.Base):
         )
         self._dnsDomain = dnsDomain
         self._bindPassword = bindPassword
-        self._bindUser = None
         self._cacert = cacert
+        self._bindURI = None
         for uri in self._determineBindURI(dnsDomain, ldapServers):
-            self._bindUser = (
-                bindUser if bindUser
-                else self._determineBindUser(
-                    dnsDomain,
-                    uri,
-                    saslUser,
-                    bindPassword,
+            try:
+                if self._determineNamespace():
+                    self._bindURI = uri
+                    break
+            except (TypeError, IndexError):
+                self.logger.debug(
+                    'URI %s is not connective. Trying other.' % uri
                 )
-            )
+                continue
 
-        if self._bindUser is None:
+        if self._bindURI is None:
             raise RuntimeError(
                 "Unable to bind as user '%s' to any provided ldaps (%s)" % (
                     saslUser,
@@ -308,6 +308,15 @@ class LDAP(utils.Base):
                 )
             )
 
+        self._bindUser = (
+            bindUser if bindUser
+            else self._determineBindUser(
+                dnsDomain,
+                uri,
+                saslUser,
+                bindPassword,
+            )
+        )
         self.logger.debug(
             "connect uri='%s', cacert='%s', bindUser='%s'",
             self._bindURI,
