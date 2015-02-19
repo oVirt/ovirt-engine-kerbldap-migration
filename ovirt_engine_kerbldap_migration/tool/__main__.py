@@ -266,13 +266,18 @@ class LDAP(utils.Base):
         return ret
 
     def _rootDSEAttribute(self, uri, attr):
-        return self.search(
-            '',
-            ldap.SCOPE_BASE,
-            '(objectClass=*)',
-            [attr],
-            ldap.initialize(uri) if uri else self._connection,
-        )[0][1][attr][0]
+        try:
+            connection = ldap.initialize(uri)
+            return self.search(
+                '',
+                ldap.SCOPE_BASE,
+                '(objectClass=*)',
+                [attr],
+                connection,
+            )[0][1][attr][0]
+        finally:
+            if connection:
+                connection.unbind_s()
 
     def connect(
         self,
