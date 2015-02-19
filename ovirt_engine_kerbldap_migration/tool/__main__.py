@@ -265,19 +265,14 @@ class LDAP(utils.Base):
             ret['entryId'] = self._encodeLdapId(ret['entryId'])
         return ret
 
-    def _rootDSEAttribute(self, uri, attr):
-        try:
-            connection = ldap.initialize(uri)
-            return self.search(
-                '',
-                ldap.SCOPE_BASE,
-                '(objectClass=*)',
-                [attr],
-                connection,
-            )[0][1][attr][0]
-        finally:
-            if connection:
-                connection.unbind_s()
+    def _rootDSEAttribute(self, attr, connection=None):
+        return self.search(
+            '',
+            ldap.SCOPE_BASE,
+            '(objectClass=*)',
+            attr,
+            connection if connection else self._connection,
+        )[0][1]
 
     def connect(
         self,
@@ -305,21 +300,25 @@ class LDAP(utils.Base):
         self._bindURI = None
         for uri in self._determineBindURI(dnsDomain, ldapServers):
             try:
-                if self._rootDSEAttribute(uri, 'supportedLDAPVersion'):
+                conn = ldap.initialize(uri)
+                if self._rootDSEAttribute(['supportedLDAPVersion'], conn):
                     self._bindURI = uri
-                    self.logger.info('Using ldap URI: %s' % uri)
                     break
-            except Exception as e:
+            except Exception:
                 self.logger.warning(
                     'URI %s is not connective. Trying other.', uri
                 )
                 self.logger.debug(
-                    'Error while connecting to ldap %s: %s', uri, e
+                    'Error while connecting to ldap', exc_info=True
                 )
+            finally:
+                if conn:
+                    conn.unbind_s()
 
         if self._bindURI is None:
             raise RuntimeError('No working ldap was found.')
 
+        self.logger.info('Using ldap URI: %s' % self._bindURI)
         self._bindUser = (
             bindUser if bindUser
             else self._determineBindUser(
