@@ -4,6 +4,7 @@ import grp
 import logging
 import os
 import pwd
+import socket
 import subprocess
 import sys
 import urlparse
@@ -232,6 +233,15 @@ class LDAP(utils.Base):
     def _decodeLegacyEntryId(self, id):
         return id
 
+    def _isLDAPConnective(self, ldapServer, port=389):
+        s = socket.socket()
+        result = 1
+        try:
+            result = s.connect_ex((ldapServer, port))
+        finally:
+            s.close()
+            return not bool(result)
+
     def _determineBindURI(self, dnsDomain, ldapServers):
         if ldapServers is None:
             ldapServers = utils.DNS().resolveSRVRecord(
@@ -239,7 +249,14 @@ class LDAP(utils.Base):
                 protocol='tcp',
                 service='ldap',
             )
-        return 'ldap://%s' % ldapServers[0]
+
+        for ldapServer in ldapServers:
+            if self._isLDAPConnective(ldapServer):
+                return 'ldap://%s' % ldapServer
+
+        raise RuntimeError(
+            'Unable to contant any provided ldap (%s)' % ', '.join(ldapServers)
+        )
 
     def _encodeLdapId(self, id):
         return id
