@@ -265,15 +265,6 @@ class LDAP(utils.Base):
             ret['entryId'] = self._encodeLdapId(ret['entryId'])
         return ret
 
-    def _rootDSEAttribute(self, attr, connection=None):
-        return self.search(
-            '',
-            ldap.SCOPE_BASE,
-            '(objectClass=*)',
-            attr,
-            connection if connection else self._connection,
-        )[0][1]
-
     def connect(
         self,
         dnsDomain,
@@ -297,23 +288,27 @@ class LDAP(utils.Base):
         self._dnsDomain = dnsDomain
         self._bindPassword = bindPassword
         self._cacert = cacert
-        self._bindURI = None
+
         for uri in self._determineBindURI(dnsDomain, ldapServers):
             try:
-                conn = ldap.initialize(uri)
-                if self._rootDSEAttribute(['supportedLDAPVersion'], conn):
+                if self.search(
+                    '',
+                    ldap.SCOPE_BASE,
+                    '(objectClass=*)',
+                    ['supportedLDAPVersion'],
+                    connection=ldap.initialize(uri),
+                ):
                     self._bindURI = uri
                     break
             except Exception:
                 self.logger.warning(
-                    'URI %s is not connective. Trying other.', uri
+                    'URI %s is not connective. Trying other.',
+                    uri,
                 )
                 self.logger.debug(
-                    'Error while connecting to ldap', exc_info=True
+                    'Error while connecting to ldap',
+                    exc_info=True,
                 )
-            finally:
-                if conn:
-                    conn.unbind_s()
 
         if self._bindURI is None:
             raise RuntimeError('No working ldap was found.')
