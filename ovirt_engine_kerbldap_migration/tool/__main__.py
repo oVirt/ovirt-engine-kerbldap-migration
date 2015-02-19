@@ -363,9 +363,11 @@ class LDAP(utils.Base):
             attrs=self._attrUserMap,
             entryId=entryId,
         )
-        user['user_id'] = str(uuid.uuid4())
-        user['external_id'] = user['entryId']
-        user['namespace'] = self.getNamespace()
+        if user:
+            user['user_id'] = str(uuid.uuid4())
+            user['external_id'] = user['entryId']
+            user['namespace'] = self.getNamespace()
+
         return user
 
     def getGroup(self, entryId):
@@ -373,9 +375,11 @@ class LDAP(utils.Base):
             attrs=self._attrGroupMap,
             entryId=entryId,
         )
-        group['id'] = str(uuid.uuid4())
-        group['external_id'] = group['entryId']
-        group['namespace'] = self.getNamespace()
+        if group:
+            group['id'] = str(uuid.uuid4())
+            group['external_id'] = group['entryId']
+            group['namespace'] = self.getNamespace()
+
         return group
 
     def getUserDN(self):
