@@ -60,20 +60,22 @@ class AAADAO(utils.Base):
         self._fetchLegacyAttributes()
 
     def isAuthzExists(self, authz):
-        return self._statement.execute(
-            statement="""
-                select 1
-                from users
-                where domain = %(authz)s
-                union
-                select 1
-                from ad_groups
-                where domain = %(authz)s
-            """,
-            args=dict(
-                authz=authz,
-            ),
-        ) == 0
+        return len(
+            self._statement.execute(
+                statement="""
+                    select 1
+                    from users
+                    where domain = %(authz)s
+                    union
+                    select 1
+                    from ad_groups
+                    where domain = %(authz)s
+                """,
+                args=dict(
+                    authz=authz,
+                ),
+            )
+        ) != 0
 
     def fetchLegacyUsers(self, legacy_domain):
         users = self._statement.execute(
