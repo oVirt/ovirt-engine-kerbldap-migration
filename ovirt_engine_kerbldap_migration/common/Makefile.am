@@ -8,8 +8,11 @@ mymodulelibdir=$(mypythonlibdir)/common
 
 dist_mymodulelib_PYTHON = \
 	__init__.py \
-	config.py \
 	utils.py \
+	$(NULL)
+
+nodist_mymodulelib_PYTHON = \
+	config.py \
 	$(NULL)
 
 clean-local: \
