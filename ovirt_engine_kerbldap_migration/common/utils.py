@@ -198,15 +198,16 @@ class VdcOptions(object):
                 if val.startswith(domain + ':'):
                     ret = val.split(':', 1)[1]
                     break
-        if not ret:
-            raise RuntimeError(
-                'Domain %s not exists in configuration.' % domain
-            )
 
         return ret
 
     def getDomainEntry(self, domain):
         provider = self._getOptionForDomain(domain, 'LDAPProviderTypes')
+        if provider is None:
+            raise RuntimeError(
+                'Domain %s not exists in configuration.' % domain
+            )
+
         ldapServers = self._getOptionForDomain(domain, 'LdapServers')
         if provider == 'activeDirectory':
             provider = 'ad'
