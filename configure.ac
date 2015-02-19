@@ -60,4 +60,5 @@ AC_CONFIG_FILES([
 	ovirt_engine_kerbldap_migration/common/config.py
 	ovirt_engine_kerbldap_migration/tool/Makefile
 ])
+AC_CONFIG_FILES([ovirt-engine-kerbldap-migration-spawn.sh], [chmod a+x ovirt-engine-kerbldap-migration-spawn.sh])
 AC_OUTPUT

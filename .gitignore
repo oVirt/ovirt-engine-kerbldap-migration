@@ -25,5 +25,6 @@ __pycache__
 tmp.*
 
 ovirt-engine-kerbldap-migration-authz-rename
+ovirt-engine-kerbldap-migration-spawn.sh
 ovirt-engine-kerbldap-migration-tool
 ovirt_engine_kerbldap_migration/common/config.py

@@ -34,7 +34,7 @@ dist_noinst_DATA = \
 	ovirt-engine-kerbldap-migration.spec \
 	$(NULL)
 
-dist_bin_SCRIPTS = \
+nodist_bin_SCRIPTS = \
 	ovirt-engine-kerbldap-migration-spawn.sh \
 	$(NULL)
 
@@ -43,6 +43,7 @@ all-local:
 	[ -L ovirt-engine-kerbldap-migration-tool ] || ln -s ovirt-engine-kerbldap-migration-spawn.sh ovirt-engine-kerbldap-migration-tool
 
 install-exec-local:
+	$(MKDIR_P) "$(DESTDIR)$(bindir)"
 	[ -r "$(DESTDIR)$(bindir)/ovirt-engine-kerbldap-migration-authz-rename" ] && rm -f "$(DESTDIR)$(bindir)/ovirt-engine-kerbldap-migration-authz-rename" || :
 	[ -r "$(DESTDIR)$(bindir)/ovirt-engine-kerbldap-migration-tool" ] && rm -f "$(DESTDIR)$(bindir)/ovirt-engine-kerbldap-migration-tool" || :
 	ln -s ovirt-engine-kerbldap-migration-spawn.sh "$(DESTDIR)$(bindir)/ovirt-engine-kerbldap-migration-authz-rename"
