@@ -291,12 +291,13 @@ class LDAP(utils.Base):
 
         for uri in self._determineBindURI(dnsDomain, ldapServers):
             try:
+                connection = ldap.initialize(uri)
                 if self.search(
                     '',
                     ldap.SCOPE_BASE,
                     '(objectClass=*)',
                     ['supportedLDAPVersion'],
-                    connection=ldap.initialize(uri),
+                    connection=connection,
                 ):
                     self._bindURI = uri
                     break
@@ -309,6 +310,8 @@ class LDAP(utils.Base):
                     'Error while connecting to ldap',
                     exc_info=True,
                 )
+            finally:
+                del connection
 
         if self._bindURI is None:
             raise RuntimeError('No working ldap was found.')
