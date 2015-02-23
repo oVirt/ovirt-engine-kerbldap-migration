@@ -253,17 +253,17 @@ class Kerberos(Base):
         super(Kerberos, self).__init__()
         self._prefix = prefix
         self._cache = None
-        self._krb5cname = None
-        self._krb5conf = None
 
     def kinit(self, user, password, krb5conf=None):
         self.logger.debug('kinit')
 
         fd, self._cache = tempfile.mkstemp()
         os.close(fd)
-        self._krb5cname = os.environ.get('KRB5CCNAME')
+        self._backupenv = {
+            'KRB5CCNAME': os.environ.get('KRB5CCNAME'),
+            'KRB5_CONFIG': os.environ.get('KRB5_CONFIG'),
+        }
         os.environ['KRB5CCNAME'] = 'FILE:%s' % self._cache
-        self._krb5conf = os.environ.get('KRB5_CONFIG')
 
         if krb5conf:
             os.environ['KRB5_CONFIG'] = krb5conf
@@ -295,14 +295,11 @@ class Kerberos(Base):
             if p.wait() != 0:
                 raise RuntimeError('Failed to execute kdestroy')
         finally:
-            if self._krb5cname is None:
-                del os.environ['KRB5CCNAME']
-            else:
-                os.environ['KRB5CCNAME'] = self._krb5cname
-            if self._krb5conf is None:
-                del os.environ['KRB5_CONFIG']
-            else:
-                os.environ['KRB5_CONFIG'] = self._krb5conf
+            for k, v in self._backupenv.iteritems():
+                if v is None:
+                    del os.environ[k]
+                else:
+                    os.environ[k] = v
             if self._cache is not None:
                 if os.path.exists(self._cache):
                     os.unlink(self._cache)
