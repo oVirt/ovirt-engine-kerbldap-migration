@@ -299,7 +299,9 @@ class Kerberos(Base):
                 del os.environ['KRB5CCNAME']
             else:
                 os.environ['KRB5CCNAME'] = self._krb5cname
-            if self._krb5conf:
+            if self._krb5conf is None:
+                del os.environ['KRB5_CONFIG']
+            else:
                 os.environ['KRB5_CONFIG'] = self._krb5conf
             if self._cache is not None:
                 if os.path.exists(self._cache):
