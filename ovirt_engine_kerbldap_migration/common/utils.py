@@ -253,27 +253,30 @@ class Kerberos(Base):
         super(Kerberos, self).__init__()
         self._prefix = prefix
         self._cache = None
-        self._env = None
+        self._krb5cname = None
+        self._krb5conf = None
 
-    def kinit(self, user, password):
+    def kinit(self, user, password, krb5conf=None):
         self.logger.debug('kinit')
 
         fd, self._cache = tempfile.mkstemp()
         os.close(fd)
-        self._env = os.environ.get('KRB5CCNAME')
+        self._krb5cname = os.environ.get('KRB5CCNAME')
         os.environ['KRB5CCNAME'] = 'FILE:%s' % self._cache
+        self._krb5conf = os.environ.get('KRB5_CONFIG')
 
-        env = os.environ.copy()
-        env['KRB5_CONFIG'] = os.path.join(
-            self._prefix,
-            'etc/ovirt-engine/krb5.conf',
-        )
+        if krb5conf:
+            os.environ['KRB5_CONFIG'] = krb5conf
+        else:
+            os.environ['KRB5_CONFIG'] = os.path.join(
+                self._prefix,
+                'etc/ovirt-engine/krb5.conf',
+            )
         p = subprocess.Popen(
             [
                 'kinit',
                 user,
             ],
-            env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -292,10 +295,12 @@ class Kerberos(Base):
             if p.wait() != 0:
                 raise RuntimeError('Failed to execute kdestroy')
         finally:
-            if self._env is None:
+            if self._krb5cname is None:
                 del os.environ['KRB5CCNAME']
             else:
-                os.environ['KRB5CCNAME'] = self._env
+                os.environ['KRB5CCNAME'] = self._krb5cname
+            if self._krb5conf:
+                os.environ['KRB5_CONFIG'] = self._krb5conf
             if self._cache is not None:
                 if os.path.exists(self._cache):
                     os.unlink(self._cache)

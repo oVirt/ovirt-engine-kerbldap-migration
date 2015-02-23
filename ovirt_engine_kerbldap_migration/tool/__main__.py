@@ -226,6 +226,7 @@ class LDAP(utils.Base):
         ldapServer,
         saslUser,
         bindPassword,
+        krb5conf,
     ):
         return saslUser.split('@', 1)[0]
 
@@ -272,7 +273,8 @@ class LDAP(utils.Base):
         saslUser,
         bindPassword,
         bindUser,
-        cacert=None
+        krb5conf,
+        cacert=None,
     ):
         self.logger.debug(
             (
@@ -324,6 +326,7 @@ class LDAP(utils.Base):
                 uri,
                 saslUser,
                 bindPassword,
+                krb5conf,
             )
         )
         self.logger.debug(
@@ -423,8 +426,9 @@ class SimpleLDAP(LDAP):
         ldapServer,
         saslUser,
         bindPassword,
+        krb5conf,
     ):
-        self._kerberos.kinit(saslUser, bindPassword)
+        self._kerberos.kinit(saslUser, bindPassword, krb5conf)
         connection = None
         try:
             connection = ldap.initialize(ldapServer)
@@ -583,6 +587,7 @@ class ADLDAP(LDAP):
         ldapServer,
         saslUser,
         bindPassword,
+        krb5conf,
     ):
         return '%s@%s' % (saslUser.split('@', 1)[0], dnsDomain)
 
@@ -926,6 +931,14 @@ def parse_args():
             'autodetection'
         ),
     )
+    parser.add_argument(
+        '--krb5conf',
+        dest='krb5conf',
+        metavar='FILE',
+        help=(
+            'use this krb5 conf instead of ovirt default krb5 conf'
+        ),
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1008,6 +1021,7 @@ def convert(args, engine):
                     args.bindPassword if args.bindPassword
                     else domainEntry['password']
                 ),
+                krb5conf=args.krb5conf,
                 cacert=args.cacert
             )
 
