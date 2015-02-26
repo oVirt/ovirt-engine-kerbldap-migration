@@ -110,6 +110,11 @@ class AAADAO(utils.Base):
             statement="""select * from permissions""",
         )
 
+    def fetchAllSubscriptions(self):
+        return self._statement.execute(
+            statement="""select * from event_subscriber""",
+        )
+
     def insertPermission(self, permission):
         self._statement.execute(
             statement="""
@@ -197,6 +202,26 @@ class AAADAO(utils.Base):
                 )
             """,
             args=group,
+        )
+
+    def insertSubscription(self, subscription):
+        self._statement.execute(
+            statement="""
+                insert into event_subscriber (
+                    subscriber_id,
+                    event_up_name,
+                    method_address,
+                    tag_name,
+                    notification_method
+                ) values (
+                    %(subscriber_id)s,
+                    %(event_up_name)s,
+                    %(method_address)s,
+                    %(tag_name)s,
+                    %(notification_method)s
+                )
+            """,
+            args=subscription,
         )
 
 
@@ -1090,6 +1115,14 @@ def convert(args, engine):
                         perm['ad_element_id'] = user['user_id']
                         permissions.append(perm)
 
+            logger.info('Converting event subscriptions')
+            subscriptions = []
+            for subscription in aaadao.fetchAllSubscriptions():
+                user = users.get(subscription['subscriber_id'])
+                if user:
+                    subscription['subscriber_id'] = user['user_id']
+                    subscriptions.append(subscription)
+
             logger.info('Adding new users')
             for user in users.values():
                 aaadao.insertUser(user)
@@ -1101,6 +1134,10 @@ def convert(args, engine):
             logger.info('Adding new permissions')
             for permission in permissions:
                 aaadao.insertPermission(permission)
+
+            logger.info('Adding new subsriptions')
+            for subscription in subscriptions:
+                aaadao.insertSubscription(subscription)
 
             logger.info('Creating new extensions configuration')
             aaaprofile.save()
