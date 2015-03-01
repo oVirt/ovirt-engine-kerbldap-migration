@@ -163,11 +163,13 @@ You have to enable simple bind for your search user
 usage: ovirt-engine-kerbldap-migration-tool [-h] [--version] [--debug]
                                             [--log FILE] [--apply] --domain
                                             DOMAIN --cacert FILE
+                                            [--profile NAME]
                                             [--authn-name NAME]
                                             [--authz-name NAME]
-                                            [--profile NAME] [--bind-user DN]
+                                            [--bind-user DN]
                                             [--bind-password PASSWORD]
                                             [--ldap-servers DNS]
+                                            [--krb5conf FILE]
 
 Migrate legacy users/groups with permissions into new ldap provider.
 
@@ -180,11 +182,10 @@ optional arguments:
   --domain DOMAIN       domain name to convert
   --cacert FILE         certificate chain to use for ssl, or "NONE" if you do
                         not want SSL
+  --profile NAME        new profile name, default domain name with -new suffix
   --authn-name NAME     authn extension name, default profile name with -authn
                         suffix
   --authz-name NAME     authz extension name, default profile name with -authz
-                        suffix
-  --profile NAME        new profile name, default old profile name with -new
                         suffix
   --bind-user DN        use this user to bind, instead of performing
                         autodetection
@@ -193,12 +194,13 @@ optional arguments:
                         password
   --ldap-servers DNS    specify ldap servers explicitly instead of performing
                         autodetection
+  --krb5conf FILE       use this krb5 conf instead of ovirt default krb5 conf
 ```
 
 ### ovirt-engine-kerbldap-migration-authz-rename
 ```
-usage: ovirt-engine-kerbldap-migration-authz-rename [-h] [--version] [--apply]
-                                                    [--debug] [--log FILE]
+usage: ovirt-engine-kerbldap-migration-authz-rename [-h] [--version] [--debug]
+                                                    [--log FILE] [--apply]
                                                     --authz-name NAME
                                                     --new-name NAME
 
