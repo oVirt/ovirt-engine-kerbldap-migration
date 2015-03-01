@@ -918,6 +918,12 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        '--profile',
+        dest='profile',
+        metavar='NAME',
+        help='new profile name, default domain name with -new suffix',
+    )
+    parser.add_argument(
         '--authn-name',
         dest='authnName',
         metavar='NAME',
@@ -928,12 +934,6 @@ def parse_args():
         dest='authzName',
         metavar='NAME',
         help='authz extension name, default profile name with -authz suffix',
-    )
-    parser.add_argument(
-        '--profile',
-        dest='profile',
-        metavar='NAME',
-        help='new profile name, default old profile name with -new suffix',
     )
     parser.add_argument(
         '--bind-user',
@@ -972,14 +972,14 @@ def parse_args():
             'Profile cannot be the same as domain',
         )
 
-    if not args.authnName:
-        args.authnName = '%s-authn' % args.domain
-
-    if not args.authzName:
-        args.authzName = '%s-authz' % args.domain
-
     if not args.profile:
         args.profile = '%s-new' % args.domain
+
+    if not args.authnName:
+        args.authnName = '%s-authn' % args.profile
+
+    if not args.authzName:
+        args.authzName = '%s-authz' % args.profile
 
     if args.cacert == 'NONE':
         args.cacert = None
