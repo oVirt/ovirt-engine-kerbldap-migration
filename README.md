@@ -8,7 +8,7 @@ robust, flexible and easy to manage.
 This package contains two tools:
 
 * Migration tool
-  a tool to duplicat legacy LDAP based profile (domain) into a new
+  a tool to duplicate legacy LDAP based profile (domain) into a new
   profile based on the new ldap provider.
   All users, groups and permissions are duplicated into the new
   profile.
