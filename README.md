@@ -6,12 +6,20 @@ the new ovirt-engine-extension-aaa-ldap provider, which is much more
 robust, flexible and easy to manage.
 
 This package contains two tools:
-* Migration tool - a tool to duplicate all users, groups and permissions
-  from existing provider into the new provider and create new provider
-  configuration files.
-* Authz rename - due to rhbz#1133137, the name of authz may be important,
-  in cases that password delegation into VM are used, it is required to
-  rename the authz name to the original name.
+
+* Migration tool
+  a tool to duplicat legacy LDAP based profile (domain) into a new
+  profile based on the new ldap provider.
+  All users, groups and permissions are duplicated into the new
+  profile.
+  The legacy and the new profiles may be used in parallel during
+  migration and test period. Existing profile continues to be fully
+  functional, and can be removed when new provider is approved.
+
+* Authz rename
+  due to rhbz#1133137, the name of authz may be important, in cases
+  that password delegation into VM are used, it is required to rename
+  the authz name to the original name.
 
 ## Migration sequence
 
