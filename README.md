@@ -97,7 +97,7 @@ This package contains two tools:
 
     * Profile name will be *myldap.com*-new.
     * Try to login using your current user names, checkout group assignments.
-    * Try to search directory, the authz name will be  *myldap.com*-authz.
+    * Try to search directory, the authz name will be  *myldap.com*-new-authz.
 
 8. Remove the legacy provider.
     ```
@@ -127,7 +127,7 @@ This package contains two tools:
 
     1. Execute authz rename tool in non destructive mode.
         ```
-        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-authz --new-name myldap.com
+        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-new-authz --new-name myldap.com
         <snip>
         [WARNING] Apply parameter was not specified rolling back
         ```
@@ -141,7 +141,7 @@ This package contains two tools:
     2. Execute authz rename tool and apply settings.
 
         ```
-        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-authz --new-name myldap.com
+        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-new-authz --new-name myldap.com
         <snip>
         [INFO   ] Authz was successfully renamed to myldap.com
         ```
