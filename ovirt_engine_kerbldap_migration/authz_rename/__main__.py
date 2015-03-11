@@ -196,8 +196,8 @@ def overrideAuthz(args, engine):
                             os.chmod(f.name, 0o644)
                             f.write(newcontent)
                         aaadao.update(
+                            args.newName,
                             args.authzName,
-                            args.newName
                         )
                         updated = True
 
