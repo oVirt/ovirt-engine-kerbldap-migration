@@ -1,0 +1,8 @@
+ovirt-engine-kerbldap-migration -- ovirt-engine legacy kerbldap migration tools
+
+2015-03-17 - Version 1.0.0
+
+Alon Bar-Lev <alonbl@redhat.com>
+Ondra Machacek <omachace@redhat.com>
+
+ * Initial implementation.
