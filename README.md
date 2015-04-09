@@ -48,8 +48,17 @@ This package contains two tools:
   **Active Directory**
 
     1. Press "Start" -> "Run" and write "cmd" and press "Enter".
-    2. Into cmd write "certutil -ca.cert ad.crt"
-    3. Copy "ca.crt" to ovirt machine.
+    2. Extract the CA certificate using the following command:
+
+        ```
+        > certutil -ca.cert ca.der
+        ```
+    3. Copy ca.der to oVirt machine.
+    4. Convert to PEM format using the following command:
+
+        ```
+        $ openssl x509 -in ca.der -inform DER -out ca.crt
+        ```
   
   **OpenLDAP**
 
