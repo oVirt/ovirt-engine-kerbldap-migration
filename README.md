@@ -53,26 +53,26 @@ This package contains two tools:
         ```
         > certutil -ca.cert ca.der
         ```
-    3. Copy ca.der to oVirt machine.
+    3. Copy ca.der to oVirt machine into /tmp.
     4. Convert to PEM format using the following command:
 
         ```
-        $ openssl x509 -in ca.der -inform DER -out ca.crt
+        $ openssl x509 -in /tmp/ca.der -inform DER -out /tmp/ca.crt
         ```
   
   **OpenLDAP**
 
     In your slapd.conf find the value of "TLSCACertificateFile". This value
-    is path to your certificate. Copy it to your ovirt machine.
+    is path to your certificate. Copy it to your oVirt machine into
+    /tmp/ca.crt.
   
   **FreeIPA**
 
-    In IPA you can find root CA at "/etc/ipa/ca.crt", copy it to your ovirt
-    machine.
+    Copy /etc/ipa/ca.crt to your oVirt machine into /tmp.
 
 4. Execute migration tool in non destructive mode.
     ```
-    # ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert /tmp/myldap.crt
+    # ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert /tmp/ca.crt
     <snip>
     [WARNING] Apply parameter was not specified rolling back
     ```
@@ -89,7 +89,7 @@ This package contains two tools:
 
 5. Execute migration tool and apply settings.
     ```
-    # ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert /tmp/myldap.crt --apply
+    # ovirt-engine-kerbldap-migration-tool --domain myldap.com --cacert /tmp/ca.crt --apply
     <snip>
     [INFO   ] Conversion completed
     <snip>
