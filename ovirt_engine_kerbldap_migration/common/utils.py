@@ -216,7 +216,7 @@ class VdcOptions(object):
             user=self._getOptionForDomain(domain, 'AdUserName'),
             password=self._getOptionForDomain(domain, 'AdUserPassword'),
             provider=provider.lower() if provider else None,
-            ldapServers=ldapServers.split(',') if ldapServers else None,
+            ldapServers=ldapServers.split(';') if ldapServers else None,
         )
 
 
