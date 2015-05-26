@@ -4,6 +4,7 @@ import grp
 import logging
 import os
 import pwd
+import re
 import subprocess
 import sys
 import urlparse
@@ -664,6 +665,16 @@ class ADLDAP(LDAP):
 
 
 class AAAProfile(utils.Base):
+    SENSITIVE_PATTERN = re.compile(
+        flags=re.MULTILINE | re.VERBOSE,
+        pattern=r"""
+            ^
+            \s*
+            (?P<sensitiveKey>vars\.password)
+            .*
+            $
+        """,
+    )
 
     def __init__(
         self,
@@ -718,7 +729,11 @@ class AAAProfile(utils.Base):
 
     def save(self):
         def _writelog(f, s):
-            self.logger.debug("Write '%s'\n%s", f, s)
+            self.logger.debug(
+                "Write '%s'\n%s",
+                f,
+                re.sub(self.SENSITIVE_PATTERN, '\g<sensitiveKey> = ***', s),
+            )
             f.write(s)
 
         if not os.path.exists(os.path.dirname(self._files['configFile'])):
