@@ -227,7 +227,11 @@ class DNS(Base):
 
     def resolveSRVRecord(self, domain, protocol, service):
         query = '_%s._%s.%s' % (service, protocol, domain)
-        response = dns.resolver.query(query, 'SRV')
+        try:
+            response = dns.resolver.query(query, 'SRV')
+        except dns.resolver.NXDOMAIN:
+            raise RuntimeError("No service '%s' was found in DNS" % service)
+
         self.logger.debug(
             "Query result for srvrecord '%s': %s",
             query,
@@ -237,7 +241,8 @@ class DNS(Base):
             raise RuntimeError("Cannot resolve domain '%s'" % domain)
 
         ret = [
-            entry.target.to_text().rstrip('.') for entry in sorted(
+            '%s:%s' % (entry.target.to_text().rstrip('.'), entry.port)
+            for entry in sorted(
                 response,
                 key=lambda e: e.priority,
                 reverse=True,

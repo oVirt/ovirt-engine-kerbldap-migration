@@ -259,15 +259,31 @@ class LDAP(utils.Base):
     def _decodeLegacyEntryId(self, id):
         return id
 
-    def _determineBindURI(self, dnsDomain, ldapServers):
+    def _determineBindURI(self, dnsDomain, ldapServers, secureMode):
+        service = 'ldaps' if secureMode == 'ldaps' else 'ldap'
         if ldapServers is None:
-            ldapServers = utils.DNS().resolveSRVRecord(
-                domain=dnsDomain,
-                protocol='tcp',
-                service='ldap',
-            )
+            ldapServers = [
+                '%s://%s' % (service, server)
+                for server in utils.DNS().resolveSRVRecord(
+                    domain=dnsDomain,
+                    protocol='tcp',
+                    service=service,
+                )
+            ]
+        else:
+            ldapServers = [
+                '%s://%s:%s' % (
+                    service,
+                    server,
+                    '636' if secureMode == 'ldaps' else '389'
+                )
+                for server in ldapServers if server.find(':') == -1
+            ] + [
+                '%s://%s' % (service, server)
+                for server in ldapServers if server.find(':') > 0
+            ]
 
-        return ['ldap://%s' % server for server in ldapServers]
+        return ldapServers
 
     def _encodeLdapId(self, id):
         return id
@@ -300,25 +316,44 @@ class LDAP(utils.Base):
         bindPassword,
         bindUser,
         krb5conf,
+        secureMode,
         cacert=None,
     ):
         self.logger.debug(
             (
                 "Entry dnsDomain='%s', ldapServers=%s, saslUser='%s', "
-                "bindUser='%s', cacert='%s'"
+                "bindUser='%s', cacert='%s', secureMode='%s'"
             ),
             dnsDomain,
             ldapServers,
             saslUser,
             bindUser,
             cacert,
+            secureMode,
         )
         self._dnsDomain = dnsDomain
         self._bindPassword = bindPassword
         self._cacert = cacert
+        self._secureMode = secureMode
 
-        for uri in self._determineBindURI(dnsDomain, ldapServers):
+        for uri in self._determineBindURI(dnsDomain, ldapServers, secureMode):
             try:
+                if self._secureMode in ['startTLS', 'ldaps']:
+                    if self._cacert:
+                        ldap.set_option(
+                            ldap.OPT_X_TLS_REQUIRE_CERT,
+                            ldap.OPT_X_TLS_DEMAND
+                        )
+                        ldap.set_option(
+                            ldap.OPT_X_TLS_CACERTFILE,
+                            self._cacert
+                        )
+                    else:
+                        ldap.set_option(
+                            ldap.OPT_X_TLS_REQUIRE_CERT,
+                            ldap.OPT_X_TLS_NEVER
+                        )
+
                 connection = ldap.initialize(uri)
                 if self.search(
                     '',
@@ -344,7 +379,7 @@ class LDAP(utils.Base):
         if self._bindURI is None:
             raise RuntimeError('No working ldap was found.')
 
-        self.logger.info('Using ldap URI: %s' % self._bindURI)
+        self.logger.info('Using ldap URI: %s', self._bindURI)
         self._bindUser = (
             bindUser if bindUser
             else self._determineBindUser(
@@ -370,13 +405,7 @@ class LDAP(utils.Base):
             ldap.OPT_PROTOCOL_VERSION,
             ldap.VERSION3,
         )
-        if self._cacert:
-            self._connection.set_option(
-                ldap.OPT_X_TLS_REQUIRE_CERT,
-                ldap.OPT_X_TLS_DEMAND
-            )
-            # does not work per connection?
-            ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, self._cacert)
+        if self._secureMode == 'startTLS':
             self._connection.start_tls_s()
         self._connection.simple_bind_s(self._bindUser, self._bindPassword)
         self._namespace = self._determineNamespace()
@@ -400,6 +429,9 @@ class LDAP(utils.Base):
 
     def getNamespace(self):
         return self._namespace
+
+    def getSecureMode(self):
+        return self._secureMode
 
     def getUser(self, entryId):
         user = self._getEntryById(
@@ -500,6 +532,7 @@ class SimpleLDAP(LDAP):
             'vars.user = {user}\n'
             'vars.password = {password}\n'
             '\n'
+            'pool.default.serverset.single.port = {port}\n'
             'pool.default.serverset.single.server = ${{global:vars.server}}\n'
             'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
             'pool.default.auth.simple.password = ${{global:vars.password}}\n'
@@ -508,6 +541,7 @@ class SimpleLDAP(LDAP):
             user=self._bindUser,
             password=self._bindPassword,
             server=urlparse.urlparse(self._bindURI).netloc,
+            port=self._bindURI[self._bindURI.index(':') + 1:],
         )
 
 
@@ -655,12 +689,14 @@ class ADLDAP(LDAP):
             'pool.default.serverset.type = srvrecord\n'
             'pool.default.serverset.srvrecord.domain = '
             '${{global:vars.domain}}\n'
+            'pool.default.serverset.srvrecord.service = {service}\n'
             'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
             'pool.default.auth.simple.password = ${{global:vars.password}}\n'
         ).format(
             user=self._bindUser,
             password=self._bindPassword,
             domain=self._dnsDomain,
+            service='ldaps' if self._secureMode == 'ldaps' else 'ldap',
         )
 
 
@@ -740,6 +776,8 @@ class AAAProfile(utils.Base):
             os.makedirs(os.path.dirname(self._files['configFile']))
 
         cacert = self._driver.getCACert()
+        secureMode = self._driver.getSecureMode()
+        ssl = secureMode in ['startTLS', 'ldaps']
         if cacert:
             keystore = self._filetransaction.getFileName(
                 self._files['trustStore'],
@@ -852,6 +890,8 @@ class AAAProfile(utils.Base):
 
                     '\n'
 
+                    'pool.default.ssl.enable = {ssl}\n'
+                    'pool.default.ssl.insecure = {insecure}\n'
                     'pool.default.ssl.startTLS = {startTLS}\n'
 
                     'pool.default.ssl.truststore.file = '
@@ -859,8 +899,10 @@ class AAAProfile(utils.Base):
 
                     'pool.default.ssl.truststore.password = changeit\n'
                 ).format(
+                    ssl=str(ssl).lower(),
+                    insecure=str(ssl and not cacert).lower(),
                     common=self._driver.getConfig(),
-                    startTLS='true' if cacert else 'false',
+                    startTLS=str(secureMode == 'startTLS').lower(),
                     profile=self._vars['profile'],
                 )
             )
@@ -924,13 +966,16 @@ def parse_args():
         help='domain name to convert',
     )
     parser.add_argument(
+        '--secure-mode',
+        required=True,
+        dest='secureMode',
+        choices=['simple', 'startTLS', 'ldaps'],
+        help='secure mechanism to use, either simple, startTLS or ldaps',
+    )
+    parser.add_argument(
         '--cacert',
         metavar='FILE',
-        required=True,
-        help=(
-            'certificate chain to use for ssl, '
-            'or "NONE" if you do not want SSL'
-        ),
+        help='certificate chain to use for ssl',
     )
     parser.add_argument(
         '--profile',
@@ -975,11 +1020,8 @@ def parse_args():
         '--krb5conf',
         dest='krb5conf',
         metavar='FILE',
-        help=(
-            'use this krb5 conf instead of ovirt default krb5 conf'
-        ),
+        help='use this krb5 conf instead of ovirt default krb5 conf',
     )
-
     args = parser.parse_args(sys.argv[1:])
 
     if args.domain == args.profile:
@@ -995,9 +1037,6 @@ def parse_args():
 
     if not args.authzName:
         args.authzName = '%s-authz' % args.profile
-
-    if args.cacert == 'NONE':
-        args.cacert = None
 
     return args
 
@@ -1062,7 +1101,8 @@ def convert(args, engine):
                     else domainEntry['password']
                 ),
                 krb5conf=args.krb5conf,
-                cacert=args.cacert
+                secureMode=args.secureMode,
+                cacert=args.cacert,
             )
 
             aaaprofile = AAAProfile(
@@ -1160,6 +1200,13 @@ def convert(args, engine):
             logger.info('Conversion completed')
 
             if args.cacert is None:
+                logger.warning(
+                    'We strongly suggest to provide cacert, '
+                    'you can do this later, please refer to '
+                    'ovirt-engine-extension-aaa-ldap documentation'
+                )
+
+            if args.secureMode == 'simple':
                 logger.warning(
                     'We strongly suggest to enable SSL, '
                     'you can do this later, please refer to '
