@@ -899,10 +899,10 @@ class AAAProfile(utils.Base):
 
                     'pool.default.ssl.truststore.password = changeit\n'
                 ).format(
-                    ssl=str(ssl).lower(),
-                    insecure=str(ssl and not cacert).lower(),
+                    ssl='true' if ssl else 'false',
+                    insecure='true' if ssl and not cacert else 'false',
                     common=self._driver.getConfig(),
-                    startTLS=str(secureMode == 'startTLS').lower(),
+                    startTLS='true' if secureMode == 'startTLS' else 'false',
                     profile=self._vars['profile'],
                 )
             )
