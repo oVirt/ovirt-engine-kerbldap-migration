@@ -967,7 +967,6 @@ def parse_args():
     )
     parser.add_argument(
         '--protocol',
-        required=True,
         dest='protocol',
         choices=['simple', 'startTLS', 'ldaps'],
         default='startTLS',
