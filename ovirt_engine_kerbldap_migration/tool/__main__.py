@@ -1014,7 +1014,7 @@ def parse_args():
         help="use this password instead of reusing sasl user's password",
     )
     parser.add_argument(
-        '--ldap-servers',
+        '--ldap-url',
         dest='ldapServers',
         metavar='DNS',
         help=(
