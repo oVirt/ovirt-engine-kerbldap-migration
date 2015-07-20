@@ -13,11 +13,6 @@ from M2Crypto import RSA
 
 
 try:
-    import dns.resolver
-except ImportError:
-    raise RuntimeError('Please install python-dns')
-
-try:
     import psycopg2
 except ImportError:
     raise RuntimeError('Please install python-psycopg2')
@@ -227,24 +222,32 @@ class DNS(Base):
 
     def resolveSRVRecord(self, domain, protocol, service):
         query = '_%s._%s.%s' % (service, protocol, domain)
-        try:
-            response = dns.resolver.query(query, 'SRV')
-        except dns.resolver.NXDOMAIN:
-            raise RuntimeError("No service '%s' was found in DNS" % service)
-
-        self.logger.debug(
-            "Query result for srvrecord '%s': %s",
-            query,
-            response.response,
+        p = subprocess.Popen(
+            [
+                'dig',
+                '+noall',
+                '+answer',
+                query,
+                'SRV',
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        if not response:
-            raise RuntimeError("Cannot resolve domain '%s'" % domain)
-
+        stdout, stderr = p.communicate()
+        self.logger.debug('dig stdout=%s, stderr=%s', stdout, stderr)
+        if p.wait() != 0:
+            raise RuntimeError(
+                "Cannot fetch SRV record for domain %s" % domain
+            )
+        self.logger.debug(
+            "Query result for srvrecord '%s': %s", query, stdout
+        )
         ret = [
-            '%s:%s' % (entry.target.to_text().rstrip('.'), entry.port)
+            '%s:%s' % (entry[7].rstrip('.'), entry[6])
             for entry in sorted(
-                response,
-                key=lambda e: e.priority,
+                [entry.split() for entry in stdout.split('\n') if entry],
+                key=lambda e: e[4],
                 reverse=True,
             )
         ]

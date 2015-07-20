@@ -14,6 +14,7 @@ BuildArch:	noarch
 
 BuildRequires:	python2-devel
 
+Requires:	bind-utils
 Requires:	cyrus-sasl-gssapi
 Requires:	java
 Requires:	krb5-workstation
@@ -21,7 +22,6 @@ Requires:	m2crypto
 Requires:	openssl
 Requires:	python
 Requires:	python-argparse
-Requires:	python-dns
 Requires:	python-ldap
 Requires:	python-psycopg2
 
