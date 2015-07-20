@@ -3,6 +3,7 @@ import datetime
 import glob
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -217,37 +218,57 @@ class VdcOptions(object):
 
 class DNS(Base):
 
+    _DOMAIN_RE = re.compile(
+        flags=re.VERBOSE,
+        pattern=r"""
+            ^
+            [\w._-]+
+            \s+
+            \d+
+            \s+
+            IN
+            \s+
+            SRV
+            \s+
+            (?P<priority>\d+)
+            \s+
+            \d+
+            \s+
+            (?P<port>\d+)
+            \s+
+            (?P<host>[\w._-]+)
+            \s*
+            $
+        """
+    )
+
     def __init__(self):
         super(DNS, self).__init__()
 
     def resolveSRVRecord(self, domain, protocol, service):
-        query = '_%s._%s.%s' % (service, protocol, domain)
         p = subprocess.Popen(
             [
                 'dig',
                 '+noall',
                 '+answer',
-                query,
+                '_%s._%s.%s' % (service, protocol, domain),
                 'SRV',
             ],
-            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         stdout, stderr = p.communicate()
+        stdout = stdout.decode('utf-8', 'replace').splitlines()
         self.logger.debug('dig stdout=%s, stderr=%s', stdout, stderr)
         if p.wait() != 0:
             raise RuntimeError(
                 "Cannot fetch SRV record for domain %s" % domain
             )
-        self.logger.debug(
-            "Query result for srvrecord '%s': %s", query, stdout
-        )
         ret = [
-            '%s:%s' % (entry[7].rstrip('.'), entry[6])
-            for entry in sorted(
-                [entry.split() for entry in stdout.split('\n') if entry],
-                key=lambda e: e[4],
+            '%s:%s' % (m.group('host').rstrip('.'), m.group('port'))
+            for m in sorted(
+                [re.match(self._DOMAIN_RE, entry) for entry in stdout],
+                key=lambda m: m.group('priority'),
                 reverse=True,
             )
         ]
