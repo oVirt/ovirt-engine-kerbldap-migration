@@ -258,6 +258,7 @@ class DNS(Base):
             stderr=subprocess.PIPE,
         )
         stdout, stderr = p.communicate()
+        stderr = stderr.decode('utf-8', 'replace')
         stdout = stdout.decode('utf-8', 'replace').splitlines()
         self.logger.debug('dig stdout=%s, stderr=%s', stdout, stderr)
         if p.wait() != 0:
@@ -267,8 +268,12 @@ class DNS(Base):
         ret = [
             '%s:%s' % (m.group('host').rstrip('.'), m.group('port'))
             for m in sorted(
-                [re.match(self._DOMAIN_RE, entry) for entry in stdout],
-                key=lambda m: m.group('priority'),
+                [
+                    m for m in [
+                        self._DOMAIN_RE.match(e) for e in stdout if e
+                    ] if m
+                ],
+                key=lambda m: int(m.group('priority')),
                 reverse=True,
             )
         ]
