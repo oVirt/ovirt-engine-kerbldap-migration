@@ -259,28 +259,15 @@ class LDAP(utils.Base):
     def _decodeLegacyEntryId(self, id):
         return id
 
-    def _determineBindURI(self, dnsDomain, ldapServers, protocol):
-        service = 'ldaps' if protocol == 'ldaps' else 'ldap'
+    def _determineBindURI(self, dnsDomain, ldapServers):
         if ldapServers is None:
             ldapServers = [
-                '%s://%s' % (service, server)
+                'ldap://%s' % server
                 for server in utils.DNS().resolveSRVRecord(
                     domain=dnsDomain,
                     protocol='tcp',
-                    service=service,
+                    service='ldap',
                 )
-            ]
-        else:
-            ldapServers = [
-                '%s://%s:%s' % (
-                    service,
-                    server,
-                    '636' if protocol == 'ldaps' else '389'
-                )
-                for server in ldapServers if server.find(':') == -1
-            ] + [
-                '%s://%s' % (service, server)
-                for server in ldapServers if server.find(':') > 0
             ]
 
         return ldapServers
@@ -316,43 +303,44 @@ class LDAP(utils.Base):
         bindPassword,
         bindUser,
         krb5conf,
-        protocol,
+        insecure,
         cacert=None,
     ):
         self.logger.debug(
             (
                 "Entry dnsDomain='%s', ldapServers=%s, saslUser='%s', "
-                "bindUser='%s', cacert='%s', protocol='%s'"
+                "bindUser='%s', cacert='%s', insecure='%s'"
             ),
             dnsDomain,
             ldapServers,
             saslUser,
             bindUser,
             cacert,
-            protocol,
+            insecure,
         )
         self._dnsDomain = dnsDomain
         self._bindPassword = bindPassword
         self._cacert = cacert
-        self._protocol = protocol
+        self._insecure = insecure
+        self._servers = ldapServers
+        self.logger.info(self._servers)
 
-        for uri in self._determineBindURI(dnsDomain, ldapServers, protocol):
+        for uri in self._determineBindURI(dnsDomain, ldapServers):
             try:
-                if self._protocol in ['startTLS', 'ldaps']:
-                    if self._cacert:
-                        ldap.set_option(
-                            ldap.OPT_X_TLS_REQUIRE_CERT,
-                            ldap.OPT_X_TLS_DEMAND
-                        )
-                        ldap.set_option(
-                            ldap.OPT_X_TLS_CACERTFILE,
-                            self._cacert
-                        )
-                    else:
-                        ldap.set_option(
-                            ldap.OPT_X_TLS_REQUIRE_CERT,
-                            ldap.OPT_X_TLS_NEVER
-                        )
+                if self._cacert:
+                    ldap.set_option(
+                        ldap.OPT_X_TLS_REQUIRE_CERT,
+                        ldap.OPT_X_TLS_DEMAND
+                    )
+                    ldap.set_option(
+                        ldap.OPT_X_TLS_CACERTFILE,
+                        self._cacert
+                    )
+                elif self._insecure:
+                    ldap.set_option(
+                        ldap.OPT_X_TLS_REQUIRE_CERT,
+                        ldap.OPT_X_TLS_NEVER
+                    )
 
                 connection = ldap.initialize(uri)
                 if self.search(
@@ -405,7 +393,13 @@ class LDAP(utils.Base):
             ldap.OPT_PROTOCOL_VERSION,
             ldap.VERSION3,
         )
-        if self._protocol == 'startTLS':
+        if (
+            (self._insecure or self._cacert) and
+            (
+                self._servers and
+                all([s[:s.find(':')] == 'ldap' for s in self._servers])
+            )
+        ):
             self._connection.start_tls_s()
         self._connection.simple_bind_s(self._bindUser, self._bindPassword)
         self._namespace = self._determineNamespace()
@@ -429,9 +423,6 @@ class LDAP(utils.Base):
 
     def getNamespace(self):
         return self._namespace
-
-    def getSecureMode(self):
-        return self._protocol
 
     def getUser(self, entryId):
         user = self._getEntryById(
@@ -462,6 +453,9 @@ class LDAP(utils.Base):
 
     def getServers(self):
         return self._servers
+
+    def isInsecure(self):
+        return self._insecure
 
 
 class SimpleLDAP(LDAP):
@@ -696,7 +690,11 @@ class ADLDAP(LDAP):
             user=self._bindUser,
             password=self._bindPassword,
             domain=self._dnsDomain,
-            service='ldaps' if self._protocol == 'ldaps' else 'ldap',
+            service=(
+                'ldap' if self._servers is None or all([
+                    s[:s.find(':')] == 'ldap' for s in self._servers
+                ]) else 'ldaps'
+            )
         )
 
 
@@ -776,8 +774,8 @@ class AAAProfile(utils.Base):
             os.makedirs(os.path.dirname(self._files['configFile']))
 
         cacert = self._driver.getCACert()
-        protocol = self._driver.getSecureMode()
-        ssl = protocol in ['startTLS', 'ldaps']
+        servers = self._driver.getServers()
+        insecure = self._driver.isInsecure()
         if cacert:
             keystore = self._filetransaction.getFileName(
                 self._files['trustStore'],
@@ -899,10 +897,16 @@ class AAAProfile(utils.Base):
 
                     'pool.default.ssl.truststore.password = changeit\n'
                 ).format(
-                    ssl='true' if ssl else 'false',
-                    insecure='true' if ssl and not cacert else 'false',
+                    ssl=cacert is not None or insecure,
+                    insecure=insecure,
                     common=self._driver.getConfig(),
-                    startTLS='true' if protocol == 'startTLS' else 'false',
+                    startTLS=(
+                        (cacert or insecure) and
+                        (
+                            servers is None or
+                            all([not s.startswith('ldaps') for s in servers])
+                        )
+                    ),
                     profile=self._vars['profile'],
                 )
             )
@@ -966,22 +970,21 @@ def parse_args():
         help='domain name to convert',
     )
     parser.add_argument(
-        '--protocol',
-        dest='protocol',
-        choices=['simple', 'startTLS', 'ldaps'],
-        default='startTLS',
-        help='secure mechanism to use, either simple, startTLS or ldaps',
+        '--insecure',
+        dest='insecure',
+        default=False,
+        action='store_true',
+        help='use insecure connection to commnuicate with ldap',
     )
     parser.add_argument(
         '--cacert',
         metavar='FILE',
-        help='certificate chain to use for ssl',
-    )
-    parser.add_argument(
-        '--insecure',
-        action='store_true',
-        default=False,
-        help='use insecure connection, connect without cacert',
+        required=True,
+        default='NONE',
+        help=(
+            'certificate chain to use for ssl,'
+            'or "NONE" if you do not want SSL'
+        ),
     )
     parser.add_argument(
         '--profile',
@@ -1016,10 +1019,9 @@ def parse_args():
     parser.add_argument(
         '--ldap-url',
         dest='ldapServers',
-        metavar='DNS',
+        metavar='URL',
         help=(
-            'specify ldap servers explicitly instead of performing  '
-            'autodetection'
+            'specify ldap urls explicitly instead of performing autodetection'
         ),
     )
     parser.add_argument(
@@ -1044,12 +1046,20 @@ def parse_args():
     if not args.authzName:
         args.authzName = '%s-authz' % args.profile
 
-    if (
-        args.protocol in ['startTLS', 'ldaps'] and
-        args.cacert is None and
-        not args.insecure
-    ):
-        raise RuntimeError('Please provide cacert to use secure connection')
+    if args.ldapServers:
+        uriFormat = re.compile(
+            flags=re.VERBOSE,
+            pattern=r"^ldap[s]?://[\w.-]+:\d+$"
+        )
+        if not all([uriFormat.match(u) for u in args.ldapServers.split(',')]):
+            raise RuntimeError(
+                "Incorrect ldap URI format(%s). Value is '%s'." % (
+                    uriFormat.pattern, args.ldapServers
+                )
+            )
+
+    if args.cacert == 'NONE':
+        args.cacert = None
 
     return args
 
@@ -1114,7 +1124,7 @@ def convert(args, engine):
                     else domainEntry['password']
                 ),
                 krb5conf=args.krb5conf,
-                protocol=args.protocol,
+                insecure=args.insecure,
                 cacert=args.cacert,
             )
 
@@ -1215,13 +1225,6 @@ def convert(args, engine):
             if args.cacert is None:
                 logger.warning(
                     'We strongly suggest to provide cacert, '
-                    'you can do this later, please refer to '
-                    'ovirt-engine-extension-aaa-ldap documentation'
-                )
-
-            if args.protocol == 'simple':
-                logger.warning(
-                    'We strongly suggest to enable SSL, '
                     'you can do this later, please refer to '
                     'ovirt-engine-extension-aaa-ldap documentation'
                 )
