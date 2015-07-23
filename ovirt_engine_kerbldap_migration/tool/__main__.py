@@ -327,22 +327,26 @@ class LDAP(utils.Base):
 
         for uri in self._determineBindURI(dnsDomain, ldapServers):
             try:
+                connection = ldap.initialize(uri)
                 if self._cacert:
-                    ldap.set_option(
+                    connection.set_option(
                         ldap.OPT_X_TLS_REQUIRE_CERT,
                         ldap.OPT_X_TLS_DEMAND
                     )
-                    ldap.set_option(
+                    connection.set_option(
                         ldap.OPT_X_TLS_CACERTFILE,
                         self._cacert
                     )
                 elif self._insecure:
-                    ldap.set_option(
+                    connection.set_option(
                         ldap.OPT_X_TLS_REQUIRE_CERT,
                         ldap.OPT_X_TLS_NEVER
                     )
+                connection.set_option(
+                    ldap.OPT_X_TLS_NEWCTX,
+                    0
+                )
 
-                connection = ldap.initialize(uri)
                 if self.search(
                     '',
                     ldap.SCOPE_BASE,
@@ -385,6 +389,24 @@ class LDAP(utils.Base):
             self._bindUser,
         )
         self._connection = ldap.initialize(self._bindURI)
+        if self._cacert:
+            self._connection.set_option(
+                ldap.OPT_X_TLS_REQUIRE_CERT,
+                ldap.OPT_X_TLS_DEMAND
+            )
+            self._connection.set_option(
+                ldap.OPT_X_TLS_CACERTFILE,
+                self._cacert
+            )
+        elif self._insecure:
+            self._connection.set_option(
+                ldap.OPT_X_TLS_REQUIRE_CERT,
+                ldap.OPT_X_TLS_NEVER
+            )
+        self._connection.set_option(
+            ldap.OPT_X_TLS_NEWCTX,
+            0
+        )
         self._connection.set_option(
             ldap.OPT_REFERRALS,
             0,
