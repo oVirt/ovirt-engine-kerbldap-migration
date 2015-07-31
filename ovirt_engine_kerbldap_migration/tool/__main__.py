@@ -923,7 +923,7 @@ class AAAProfile(utils.Base):
 
                     'pool.default.ssl.truststore.password = changeit\n'
                 ).format(
-                    ssl='true' if secure else 'false',
+                    ssl='true' if protocol == 'ldaps' else 'false',
                     insecure='true' if secure and cacert is None else 'false',
                     common=self._driver.getConfig(),
                     startTLS='true' if protocol == 'startTLS' else 'false',
