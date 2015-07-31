@@ -5,6 +5,7 @@ ovirt-engine-kerbldap-migration -- ovirt-engine legacy kerbldap migration tools
  * tool: add protocol support
  * utils: use dig to resolve SRV records
  * tool: add support to choose secure mode
+ * tool: add support for port specification
 
 2015-05-31 - Version 1.0.1
 
