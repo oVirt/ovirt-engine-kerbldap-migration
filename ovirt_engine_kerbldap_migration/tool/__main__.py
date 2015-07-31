@@ -262,8 +262,8 @@ class LDAP(utils.Base):
         return id
 
     def _determineBindURI(self, dnsDomain, ldapServers, protocol):
+        service = 'ldaps' if protocol == 'ldaps' else 'ldap'
         if ldapServers is None:
-            service = 'ldaps' if protocol == 'ldaps' else 'ldap'
             ldapServers = [
                 '%s://%s' % (service, server)
                 for server in utils.DNS().resolveSRVRecord(
@@ -272,7 +272,11 @@ class LDAP(utils.Base):
                     service=service,
                 )
             ]
-
+        else:
+            ldapServers = [
+                '%s://%s:%s' % (service, server, self._port)
+                for server in ldapServers
+            ]
         return ldapServers
 
     def _encodeLdapId(self, id):
@@ -307,6 +311,7 @@ class LDAP(utils.Base):
         bindUser,
         krb5conf,
         protocol,
+        port,
         cacert=None,
     ):
         self.logger.debug(
@@ -326,6 +331,7 @@ class LDAP(utils.Base):
         self._cacert = cacert
         self._protocol = protocol
         self._secure = protocol in ['ldaps', 'startTLS']
+        self._port = port
 
         for uri in self._determineBindURI(dnsDomain, ldapServers, protocol):
             try:
@@ -916,7 +922,7 @@ class AAAProfile(utils.Base):
 
                     'pool.default.ssl.truststore.password = changeit\n'
                 ).format(
-                    ssl=secure,
+                    ssl='true' if secure else 'false',
                     insecure='true' if secure and cacert is None else 'false',
                     common=self._driver.getConfig(),
                     startTLS='true' if protocol == 'startTLS' else 'false',
@@ -1038,6 +1044,12 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        '--port',
+        dest='port',
+        metavar='PORT',
+        help="if your ldap(s) don't use default port, you can override it"
+    )
+    parser.add_argument(
         '--krb5conf',
         dest='krb5conf',
         metavar='FILE',
@@ -1061,6 +1073,9 @@ def parse_args():
 
     if args.cacert == 'NONE':
         args.cacert = None
+
+    if args.port is None:
+        args.port = '636' if args.protocol == 'ldaps' else '389'
 
     return args
 
@@ -1126,6 +1141,7 @@ def convert(args, engine):
                 ),
                 krb5conf=args.krb5conf,
                 protocol=args.protocol,
+                port=args.port,
                 cacert=args.cacert,
             )
 
