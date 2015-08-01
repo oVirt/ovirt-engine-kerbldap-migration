@@ -261,7 +261,7 @@ class LDAP(utils.Base):
     def _decodeLegacyEntryId(self, id):
         return id
 
-    def _determineBindURI(self, dnsDomain, ldapServers, protocol):
+    def _determineBindURI(self, dnsDomain, ldapServers, protocol, port):
         service = 'ldaps' if protocol == 'ldaps' else 'ldap'
         if ldapServers is None:
             ldapServers = [
@@ -274,7 +274,7 @@ class LDAP(utils.Base):
             ]
         else:
             ldapServers = [
-                '%s://%s:%s' % (service, server, self._port)
+                '%s://%s:%s' % (service, server, port)
                 for server in ldapServers
             ]
         return ldapServers
@@ -333,7 +333,12 @@ class LDAP(utils.Base):
         self._secure = protocol in ['ldaps', 'startTLS']
         self._port = port
 
-        for uri in self._determineBindURI(dnsDomain, ldapServers, protocol):
+        for uri in self._determineBindURI(
+            dnsDomain,
+            ldapServers,
+            protocol,
+            port
+        ):
             try:
                 connection = ldap.initialize(uri)
                 if self._secure:
