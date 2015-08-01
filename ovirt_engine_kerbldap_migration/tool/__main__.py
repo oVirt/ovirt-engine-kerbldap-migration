@@ -258,8 +258,8 @@ class LDAP(utils.Base):
     ):
         return saslUser.split('@', 1)[0]
 
-    def _decodeLegacyEntryId(self, id):
-        return id
+    def _decodeLegacyEntryId(self, entryId):
+        return entryId
 
     def _determineBindURI(self, dnsDomain, ldapServers, protocol, port):
         service = 'ldaps' if protocol == 'ldaps' else 'ldap'
@@ -279,8 +279,8 @@ class LDAP(utils.Base):
             ]
         return ldapServers
 
-    def _encodeLdapId(self, id):
-        return id
+    def _encodeLdapId(self, entryId):
+        return entryId
 
     def _getEntryById(self, attrs, entryId):
         ret = None
@@ -435,17 +435,17 @@ class LDAP(utils.Base):
         self._connection.simple_bind_s(self._bindUser, self._bindPassword)
         self._namespace = self._determineNamespace()
 
-    def search(self, baseDN, scope, filter, attributes, connection=None):
+    def search(self, baseDN, scope, ldapfilter, attributes, connection=None):
         self.logger.debug(
             "Search baseDN='%s', scope=%s, filter='%s', attributes=%s'",
             baseDN,
             scope,
-            filter,
+            ldapfilter,
             attributes,
         )
         if connection is None:
             connection = self._connection
-        ret = connection.search_s(baseDN, scope, filter, attributes)
+        ret = connection.search_s(baseDN, scope, ldapfilter, attributes)
         self.logger.debug('SearchResult: %s', ret)
         return ret
 
@@ -598,8 +598,13 @@ class RHDSLDAP(SimpleLDAP):
     def __init__(self, *args, **kwargs):
         super(RHDSLDAP, self).__init__(*args, **kwargs)
 
-    def _decodeLegacyEntryId(self, id):
-        return '%s%s%s-%s' % (id[:13], id[14:23], id[24:28], id[28:])
+    def _decodeLegacyEntryId(self, entryId):
+        return '%s%s%s-%s' % (
+            entryId[:13],
+            entryId[14:23],
+            entryId[24:28],
+            entryId[28:]
+        )
 
 
 class OpenLDAP(SimpleLDAP):
@@ -701,11 +706,11 @@ class ADLDAP(LDAP):
     def __init__(self, *args, **kwargs):
         super(ADLDAP, self).__init__(*args, **kwargs)
 
-    def _decodeLegacyEntryId(self, id):
-        return ldap.filter.escape_filter_chars(uuid.UUID(id).bytes_le)
+    def _decodeLegacyEntryId(self, entryId):
+        return ldap.filter.escape_filter_chars(uuid.UUID(entryId).bytes_le)
 
-    def _encodeLdapId(self, id):
-        return base64.b64encode(id)
+    def _encodeLdapId(self, entryId):
+        return base64.b64encode(entryId)
 
     def getConfig(self):
         return (
