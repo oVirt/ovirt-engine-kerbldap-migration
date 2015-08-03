@@ -552,7 +552,7 @@ class SimpleLDAP(LDAP):
             self._kerberos.kdestroy()
 
     def getConfig(self):
-        server = urlparse.urlparse(self._bindURI).netloc
+        url = urlparse.urlparse(self._bindURI)
         return (
             'include = <{provider}.properties>\n'
             '\n'
@@ -568,8 +568,8 @@ class SimpleLDAP(LDAP):
             provider=self._simpleProvider,
             user=self._bindUser,
             password=self._bindPassword,
-            server=server[:server.index(':')],
-            port=server[server.index(':') + 1:],
+            server=url.hostname,
+            port=url.port,
         )
 
 
