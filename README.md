@@ -179,14 +179,13 @@ You have to enable simple bind for your search user
 ```
 usage: ovirt-engine-kerbldap-migration-tool [-h] [--version] [--debug]
                                             [--log FILE] [--apply] --domain
-                                            DOMAIN
-                                            [--protocol {plain,startTLS,ldaps}]
+                                            DOMAIN [--protocol PROTOCOL]
                                             --cacert FILE [--profile NAME]
                                             [--authn-name NAME]
                                             [--authz-name NAME]
                                             [--bind-user DN]
                                             [--bind-password PASSWORD]
-                                            [--ldap-server URL] [--port PORT]
+                                            [--ldap-server DNS] [--port PORT]
                                             [--krb5conf FILE]
 
 Migrate legacy users/groups with permissions into new ldap provider.
@@ -198,8 +197,8 @@ optional arguments:
   --log FILE            write log into file
   --apply               apply settings
   --domain DOMAIN       domain name to convert
-  --protocol {plain,startTLS,ldaps}
-                        protocol to be used to communicate with ldap
+  --protocol PROTOCOL   protocol to be used to communicate with ldap, can be
+                        plain, startTLS or ldaps, default is startTLS
   --cacert FILE         certificate chain to use for ssl,or "NONE" if you do
                         not want SSL or insecure
   --profile NAME        new profile name, default domain name with -new suffix
@@ -212,7 +211,7 @@ optional arguments:
   --bind-password PASSWORD
                         use this password instead of reusing sasl user's
                         password
-  --ldap-server URL     specify ldap servers explicitly instead of performing
+  --ldap-server DNS     specify ldap servers explicitly instead of performing
                         autodetection
   --port PORT           if your ldap(s) don't use default port, you can
                         override it

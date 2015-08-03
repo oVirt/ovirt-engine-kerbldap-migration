@@ -1003,10 +1003,14 @@ def parse_args():
     )
     parser.add_argument(
         '--protocol',
+        metavar='PROTOCOL',
         choices=['plain', 'startTLS', 'ldaps'],
         dest='protocol',
         default='startTLS',
-        help='protocol to be used to communicate with ldap, default startTLS',
+        help=(
+            'protocol to be used to communicate with ldap, '
+            'can be plain, startTLS or ldaps, default is startTLS'
+        ),
     )
     parser.add_argument(
         '--cacert',
