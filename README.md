@@ -42,8 +42,8 @@ This package contains two tools:
     LDAP securely. Doing so requires the CA certificate that issued the
     LDAP service certificate.
 
-    If you do not wish to use TLS/SSL specify --cacert NONE in the
-    following commands.
+    If you do not wish to use TLS/SSL specify --cacert NONE
+    and --protocol=plain in the following commands.
 
   **Active Directory**
 
@@ -179,13 +179,14 @@ You have to enable simple bind for your search user
 ```
 usage: ovirt-engine-kerbldap-migration-tool [-h] [--version] [--debug]
                                             [--log FILE] [--apply] --domain
-                                            DOMAIN --cacert FILE
-                                            [--profile NAME]
+                                            DOMAIN
+                                            [--protocol {plain,startTLS,ldaps}]
+                                            --cacert FILE [--profile NAME]
                                             [--authn-name NAME]
                                             [--authz-name NAME]
                                             [--bind-user DN]
                                             [--bind-password PASSWORD]
-                                            [--ldap-servers DNS]
+                                            [--ldap-server URL] [--port PORT]
                                             [--krb5conf FILE]
 
 Migrate legacy users/groups with permissions into new ldap provider.
@@ -197,8 +198,10 @@ optional arguments:
   --log FILE            write log into file
   --apply               apply settings
   --domain DOMAIN       domain name to convert
-  --cacert FILE         certificate chain to use for ssl, or "NONE" if you do
-                        not want SSL
+  --protocol {plain,startTLS,ldaps}
+                        protocol to be used to communicate with ldap
+  --cacert FILE         certificate chain to use for ssl,or "NONE" if you do
+                        not want SSL or insecure
   --profile NAME        new profile name, default domain name with -new suffix
   --authn-name NAME     authn extension name, default profile name with -authn
                         suffix
@@ -209,8 +212,10 @@ optional arguments:
   --bind-password PASSWORD
                         use this password instead of reusing sasl user's
                         password
-  --ldap-servers DNS    specify ldap servers explicitly instead of performing
+  --ldap-server URL     specify ldap servers explicitly instead of performing
                         autodetection
+  --port PORT           if your ldap(s) don't use default port, you can
+                        override it
   --krb5conf FILE       use this krb5 conf instead of ovirt default krb5 conf
 ```
 

@@ -1003,7 +1003,7 @@ def parse_args():
         choices=['plain', 'startTLS', 'ldaps'],
         dest='protocol',
         default='startTLS',
-        help='protocol to be used to communicate with ldap',
+        help='protocol to be used to communicate with ldap, default startTLS',
     )
     parser.add_argument(
         '--cacert',
@@ -1048,9 +1048,10 @@ def parse_args():
     parser.add_argument(
         '--ldap-server',
         dest='ldapServers',
-        metavar='URL',
+        metavar='DNS',
         help=(
-            'specify ldap urls explicitly instead of performing autodetection'
+            'specify ldap servers explicitly instead of performing '
+            'autodetection'
         ),
     )
     parser.add_argument(
