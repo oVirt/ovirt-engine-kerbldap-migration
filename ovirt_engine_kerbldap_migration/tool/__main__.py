@@ -270,9 +270,12 @@ class LDAP(utils.Base):
                     domain=dnsDomain,
                     protocol='tcp',
                     service=service,
+                    port=port,
                 )
             ]
         else:
+            if port is None:
+                port = '636' if protocol == 'ldaps' else '389'
             ldapUris = [
                 '%s://%s:%s' % (service, server, port)
                 for server in ldapServers
@@ -1084,9 +1087,6 @@ def parse_args():
 
     if args.cacert == 'NONE':
         args.cacert = None
-
-    if args.port is None:
-        args.port = '636' if args.protocol == 'ldaps' else '389'
 
     return args
 

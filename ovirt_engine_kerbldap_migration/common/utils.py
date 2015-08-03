@@ -245,7 +245,7 @@ class DNS(Base):
     def __init__(self):
         super(DNS, self).__init__()
 
-    def resolveSRVRecord(self, domain, protocol, service):
+    def resolveSRVRecord(self, domain, protocol, service, port):
         p = subprocess.Popen(
             [
                 'dig',
@@ -266,7 +266,10 @@ class DNS(Base):
                 "Cannot fetch SRV record for domain %s" % domain
             )
         ret = [
-            '%s:%s' % (m.group('host').rstrip('.'), m.group('port'))
+            '%s:%s' % (
+                m.group('host').rstrip('.'),
+                port if port is not None else m.group('port')
+            )
             for m in sorted(
                 [
                     m for m in [
