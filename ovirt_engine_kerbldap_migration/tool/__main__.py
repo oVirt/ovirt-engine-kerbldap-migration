@@ -264,7 +264,7 @@ class LDAP(utils.Base):
     def _determineBindURI(self, dnsDomain, ldapServers, protocol, port):
         service = 'ldaps' if protocol == 'ldaps' else 'ldap'
         if ldapServers is None:
-            ldapServers = [
+            ldapUris = [
                 '%s://%s' % (service, server)
                 for server in utils.DNS().resolveSRVRecord(
                     domain=dnsDomain,
@@ -273,11 +273,11 @@ class LDAP(utils.Base):
                 )
             ]
         else:
-            ldapServers = [
+            ldapUris = [
                 '%s://%s:%s' % (service, server, port)
                 for server in ldapServers
             ]
-        return ldapServers
+        return ldapUris
 
     def _encodeLdapId(self, entryId):
         return entryId
@@ -331,13 +331,12 @@ class LDAP(utils.Base):
         self._cacert = cacert
         self._protocol = protocol
         self._secure = protocol in ['ldaps', 'startTLS']
-        self._port = port
 
         for uri in self._determineBindURI(
             dnsDomain,
             ldapServers,
             protocol,
-            port
+            port,
         ):
             try:
                 connection = ldap.initialize(uri)
