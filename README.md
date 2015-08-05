@@ -1,6 +1,8 @@
 ovirt-engine-kerbldap-migration
 ===============================
 
+[![Build Status](https://travis-ci.org/machacekondra/ovirt-engine-kerbldap-migration.svg?branch=master)](https://travis-ci.org/machacekondra/ovirt-engine-kerbldap-migration)
+
 A package to ease migration from oVirt engine legacy LDAP provider into
 the new ovirt-engine-extension-aaa-ldap provider, which is much more
 robust, flexible and easy to manage.
