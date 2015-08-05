@@ -16,7 +16,7 @@ install:
 
 # run tests
 script:
- - py.test ovirt_engine_kerbldap_migration/tests/
+ - py.test .
 
 # notifications
 notifications:
