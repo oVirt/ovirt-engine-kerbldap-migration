@@ -2,8 +2,7 @@ import mock
 import os.path
 import pytest
 
-from ..common import utils
-from ..tool import __main__ as tool
+from .. import __main__ as tool
 
 AAAFFILE = '{prefix}/etc/ovirt-engine/aaa/{filename}.properties'
 EXTFILE = '{prefix}/etc/ovirt-engine/extensions.d/{filename}.properties'
@@ -12,7 +11,7 @@ EXTFILE = '{prefix}/etc/ovirt-engine/extensions.d/{filename}.properties'
 @pytest.fixture
 def adDriver():
     driver = tool.ADLDAP(
-        mock.create_autospec(utils.Kerberos),
+        mock.create_autospec(tool.utils.Kerberos),
         None,
     )
     driver._bindURI = 'ldap.activedirectory.org:188'
@@ -26,7 +25,7 @@ def adDriver():
 @pytest.fixture
 def ldapDriver():
     driver = tool.OpenLDAP(
-        mock.create_autospec(utils.Kerberos),
+        mock.create_autospec(tool.utils.Kerberos),
         None,
     )
     driver._bindURI = 'ldap.openldap.org:389'
@@ -38,7 +37,7 @@ def ldapDriver():
 
 
 def test_ad(adDriver):
-    with utils.FileTransaction() as filetransaction:
+    with tool.utils.FileTransaction() as filetransaction:
         profile = tool.AAAProfile(
             profile='activeDirectory',
             authnName='activedirectory-authn',
@@ -61,7 +60,7 @@ def test_ad(adDriver):
 
 
 def test_openldap(ldapDriver):
-    with utils.FileTransaction() as filetransaction:
+    with tool.utils.FileTransaction() as filetransaction:
         profile = tool.AAAProfile(
             profile='profile',
             authnName='authnName',
