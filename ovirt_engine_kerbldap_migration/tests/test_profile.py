@@ -2,8 +2,8 @@ import mock
 import os.path
 import pytest
 
-from ovirt_engine_kerbldap_migration.common import utils
-from ovirt_engine_kerbldap_migration.tool import __main__ as tool
+from ..common import utils
+from ..tool import __main__ as tool
 
 AAAFFILE = '{prefix}/etc/ovirt-engine/aaa/{filename}.properties'
 EXTFILE = '{prefix}/etc/ovirt-engine/extensions.d/{filename}.properties'
