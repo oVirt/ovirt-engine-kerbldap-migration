@@ -17,7 +17,7 @@ install:
 # prepare env
 before_script:
  - autoreconf -ivf && ./configure
- - useradd ovirt
+ - sudo useradd ovirt
 
 # run tests
 script:
