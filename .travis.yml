@@ -5,7 +5,7 @@ python:
 
 before_install:
  - sudo apt-get update -qq
- - sudo apt-get install -y swig libssl-dev krb5-user dnsutils autoconf autotool
+ - sudo apt-get install -y swig libssl-dev krb5-user dnsutils autoconf autotools-dev
 
 # install requirments
 install:
