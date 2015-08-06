@@ -2,7 +2,7 @@ import mock
 import os.path
 import pytest
 
-from .. import __main__ as tool
+from ..tool import __main__ as tool
 
 AAAFFILE = '{prefix}/etc/ovirt-engine/aaa/{filename}.properties'
 EXTFILE = '{prefix}/etc/ovirt-engine/extensions.d/{filename}.properties'
