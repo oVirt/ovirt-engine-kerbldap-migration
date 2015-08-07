@@ -152,7 +152,7 @@ This package contains two tools:
     2. Execute authz rename tool and apply settings.
 
         ```
-        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-new-authz --new-name myldap.com
+        ovirt-engine-kerbldap-migration-authz-rename --authz-name myldap.com-new-authz --new-name myldap.com --apply
         <snip>
         [INFO   ] Authz was successfully renamed to myldap.com
         ```
