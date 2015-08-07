@@ -201,7 +201,7 @@ class VdcOptions(object):
         provider = self._getOptionForDomain(domain, 'LDAPProviderTypes')
         if provider is None:
             raise RuntimeError(
-                'Domain %s not exists in configuration.' % domain
+                'Domain %s does not exist in configuration.' % domain
             )
 
         ldapServers = self._getOptionForDomain(domain, 'LdapServers')
