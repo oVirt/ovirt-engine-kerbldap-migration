@@ -20,19 +20,21 @@ class AAADAO(utils.Base):
         self._statement = statement
 
     def isAuthzExists(self, authz):
-        return self._statement.execute(
-            statement="""
-                select 1
-                from users
-                where domain = %(authz)s
-                union
-                select 1
-                from ad_groups
-                where domain = %(authz)s
-            """,
-            args=dict(
-                authz=authz,
-            ),
+        return len(
+            self._statement.execute(
+                statement="""
+                    select 1
+                    from users
+                    where domain = %(authz)s
+                    union
+                    select 1
+                    from ad_groups
+                    where domain = %(authz)s
+                """,
+                args=dict(
+                    authz=authz,
+                ),
+            )
         ) == 0
 
     def _updateColumn(self, table, value, oldValue):
