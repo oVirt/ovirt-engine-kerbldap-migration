@@ -1127,7 +1127,7 @@ def convert(args, engine):
             )
             if not all([domainEntry.values()]):
                 raise RuntimeError(
-                    "Domain '%s' does not exists. Exiting." % args.domain
+                    "Domain '%s' does not exist. Exiting." % args.domain
                 )
 
             domainEntry['password'] = utils.OptionDecrypt(
