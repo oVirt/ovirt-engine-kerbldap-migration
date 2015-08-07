@@ -131,7 +131,14 @@ This package contains two tools:
     * Sort by "Authorization provider".
     * Remove all that have "Authorization provider" *myldap.com*.
 
-11. [OPTIONAL] Rename authz to match legacy convention.
+11. [OPTIONAL] Rename user visible profile name.
+
+    User visible profile name, the string that appears in the drop down of
+    login dialog may be modified by editing /etc/ovirt-engine/extensions.d/*-authn.properties
+    adjusting the ovirt.engine.aaa.authn.profile.name property to any
+    string.
+
+12. [OPTIONAL] Rename authz to match legacy convention.
 
     These staps are required only if the VM password delegation feature
     is being used (Aka VM SSO).
