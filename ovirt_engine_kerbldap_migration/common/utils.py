@@ -123,6 +123,8 @@ class Statement(Base):
             if cursor is not None:
                 cursor.close()
 
+        self.logger.debug('return %s', ret)
+
         return ret
 
     def __enter__(self):
