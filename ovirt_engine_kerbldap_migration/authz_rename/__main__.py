@@ -35,7 +35,7 @@ class AAADAO(utils.Base):
                     authz=authz,
                 ),
             )
-        ) == 0
+        ) > 0
 
     def _updateColumn(self, table, value, oldValue):
         self._statement.execute(
