@@ -334,6 +334,7 @@ class LDAP(utils.Base):
         self._cacert = cacert
         self._protocol = protocol
         self._secure = protocol in ['ldaps', 'startTLS']
+        self._port = port
 
         for uri in self._determineBindURI(
             dnsDomain,
@@ -563,7 +564,7 @@ class SimpleLDAP(LDAP):
             'vars.user = {user}\n'
             'vars.password = {password}\n'
             '\n'
-            'pool.default.serverset.single.port = {port}\n'
+            '{port}'
             'pool.default.serverset.single.server = ${{global:vars.server}}\n'
             'pool.default.auth.simple.bindDN = ${{global:vars.user}}\n'
             'pool.default.auth.simple.password = ${{global:vars.password}}\n'
@@ -572,7 +573,10 @@ class SimpleLDAP(LDAP):
             user=self._bindUser,
             password=self._bindPassword,
             server=url.hostname,
-            port=url.port,
+            port=(
+                'pool.default.serverset.single.port = %s\n' % self._port
+                if self._port else ''
+            ),
         )
 
 
