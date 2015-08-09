@@ -14,10 +14,11 @@ def adDriver():
         mock.create_autospec(tool.utils.Kerberos),
         None,
     )
-    driver._bindURI = 'ldap.activedirectory.org:188'
+    driver._bindURI = 'ldap.activedirectory.org:389'
     driver._bindPassword = '123456'
     driver._dnsDomain = 'activedirectory.org'
     driver._protocol = 'ldap'
+    driver._port = '389'
 
     return driver
 
@@ -32,6 +33,7 @@ def ldapDriver():
     driver._bindPassword = '123456'
     driver._dnsDomain = 'openldap.org'
     driver._protocol = 'ldaps'
+    driver._port = '389'
 
     return driver
 
