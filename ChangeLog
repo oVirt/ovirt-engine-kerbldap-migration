@@ -1,6 +1,11 @@
 ovirt-engine-kerbldap-migration -- ovirt-engine legacy kerbldap migration tools
 
-????-??-?? - Version 1.0.3
+????-??-?? - Version 1.0.4
+
+2015-08-09 - Version 1.0.3
+ * tool: don't enforce port
+ * rename: fix sanity check
+ * tests: initial tests
 
 2015-07-31 - Version 1.0.2
 
