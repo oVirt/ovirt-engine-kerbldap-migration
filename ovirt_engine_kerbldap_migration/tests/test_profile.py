@@ -1,11 +1,18 @@
 import mock
 import os.path
 import pytest
+import shutil
+import sys
 
 from ..tool import __main__ as tool
 
 AAAFFILE = '{prefix}/etc/ovirt-engine/aaa/{filename}.properties'
 EXTFILE = '{prefix}/etc/ovirt-engine/extensions.d/{filename}.properties'
+
+
+def teardown_module():
+    if os.path.isdir("/tmp/etc"):
+        shutil.rmtree('/tmp/etc')
 
 
 @pytest.fixture
@@ -82,3 +89,17 @@ def test_openldap(ldapDriver):
     assert os.path.isfile(
         AAAFFILE.format(prefix='/tmp', filename='profile')
     )
+
+
+def test_args_bad():
+    sys.argv = ['very', 'bad']
+    with pytest.raises(SystemExit) as err:
+        tool.main()
+    assert '2' == str(err.value)
+
+
+def test_args_correct():
+    sys.argv = ['tool', '--help']
+    with pytest.raises(SystemExit) as err:
+        tool.main()
+    assert '0' == str(err.value)
