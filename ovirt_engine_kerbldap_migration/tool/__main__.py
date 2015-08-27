@@ -296,7 +296,7 @@ class LDAP(utils.Base):
             ),
             attrs.values(),
         )
-        if result:
+        if result and result[0][0] is not None:
             entry = result[0][1]
             ret = {}
             ret['__dn'] = result[0][0]
