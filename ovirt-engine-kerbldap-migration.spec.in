@@ -50,6 +50,9 @@ make %{?_smp_mflags} install DESTDIR="%{buildroot}"
 %{python_sitelib}/ovirt_engine_kerbldap_migration/
 
 %changelog
+* Thu Aug 27 2015 Ondra Machacek <omachace@redhat.com> - 1.0.4
+- Release.
+
 * Sun Aug 09 2015 Ondra Machacek <omachace@redhat.com> - 1.0.3
 - Release.
 
