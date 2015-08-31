@@ -1240,18 +1240,22 @@ def convert(args, engine):
             logger.info('Adding new users')
             for user in users.values():
                 aaadao.insertUser(user)
+            aaadao.fetchLegacyUsers(args.authzName)  # For debug purposes
 
             logger.info('Adding new groups')
             for group in groups.values():
                 aaadao.insertGroup(group)
+            aaadao.fetchLegacyGroups(args.authzName)  # For debug purposes
 
             logger.info('Adding new permissions')
             for permission in permissions:
                 aaadao.insertPermission(permission)
+            aaadao.fetchAllPermissions()  # For debug purposes
 
             logger.info('Adding new subsriptions')
             for subscription in subscriptions:
                 aaadao.insertSubscription(subscription)
+            aaadao.fetchAllSubscriptions()  # For debug purposes
 
             logger.info('Creating new extensions configuration')
             aaaprofile.save()
