@@ -672,7 +672,7 @@ class ADLDAP(LDAP):
         'surname': 'sn',
         'email': 'mail',
         'department': 'department',
-        'username': 'name',
+        'username': 'userPrincipalName',
     }
 
     _attrGroupMap = {
