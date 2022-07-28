@@ -1,6 +1,12 @@
 ovirt-engine-kerbldap-migration
 ===============================
 
+> IMPORTANT: This project has been discontinued and won't receive any further update.
+>
+> Keeping the following section only for reference.
+
+
+
 [![Build Status](https://travis-ci.org/machacekondra/ovirt-engine-kerbldap-migration.svg?branch=master)](https://travis-ci.org/machacekondra/ovirt-engine-kerbldap-migration)
 
 A package to ease migration from oVirt engine legacy LDAP provider into
